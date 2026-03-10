@@ -166,7 +166,6 @@ def filter_cut_bounded_phases(phases, timestamps, diffs, cut_thresh=CUT_THRESH):
     return result
 
 
-
 def analyze_night_phases(video_path):
     """Detect night phases via bottom-corner ambient light color."""
     print("Scanning bottom corners for ambient light changes...")

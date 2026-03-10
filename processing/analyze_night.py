@@ -24,7 +24,8 @@ import numpy as np
 
 
 RED_THRESH = 2.5   # R/G ratio indicating red ambient light (night, table view)
-BUFFER = 2         # seconds of buffer added to each boundary
+ENTRY_BUFFER = 3.5  # seconds of buffer before night entry
+EXIT_BUFFER = 1.5   # seconds of buffer after night exit
 CUT_THRESH = 40    # frame diff above this = camera cut (not a lighting change)
 MIN_PHASE_DURATION = 35  # minimum raw phase duration in seconds (filters false positives)
 
@@ -195,8 +196,8 @@ def analyze_night_phases(video_path):
     results = []
     for s, e in phases:
         results.append({
-            "start": max(0, s - BUFFER),
-            "end": min(duration - 1, e + BUFFER),
+            "start": max(0, int(s - ENTRY_BUFFER)),
+            "end": min(duration - 1, int(e + EXIT_BUFFER)),
         })
 
     print(f"Found {len(results)} night phase(s)")

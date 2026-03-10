@@ -1,0 +1,15 @@
+# Downloaded videos (copyright content)
+videos/*
+!videos/.gitkeep
+
+# Python
+processing/venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Werewolf Viewer</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64x64.png" />
+    <link rel="icon" type="image/png" sizes="128x128" href="/favicon-128x128.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192x192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/favicon-512x512.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&family=Uncial+Antiqua&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Werewolf Viewer</h1>
+      </header>
+
+      <div id="main-layout">
+        <!-- Left sidebar: Library -->
+        <aside id="sidebar-left" class="sidebar-panel">
+          <div class="sidebar-panel-header">
+            <span class="sidebar-panel-title">Library</span>
+            <button id="refresh-list" class="ctrl-btn" title="Refresh">↻</button>
+          </div>
+          <ul id="video-list"></ul>
+        </aside>
+
+      <div id="player-container">
+        <div id="video-wrapper">
+          <video id="video" preload="metadata"></video>
+
+          <!-- Night phase overlay -->
+          <div id="night-overlay" class="overlay hidden">
+            <span class="night-text">Night</span>
+          </div>
+
+          <!-- Name mask overlays (positioned dynamically) -->
+          <div id="name-masks"></div>
+
+          <!-- Custom controls (above all overlays) -->
+          <div id="custom-controls">
+            <div id="night-jump-buttons"></div>
+            <div id="progress-container">
+              <div id="progress-bar">
+                <div id="progress-buffered"></div>
+                <div id="progress-played"></div>
+                <div id="night-markers"></div>
+              </div>
+            </div>
+            <div id="controls-row">
+              <button id="play-btn" class="ctrl-btn" title="Play / Pause">▶</button>
+              <span id="time-display">0:00 / 0:00</span>
+              <input id="volume-slider" type="range" min="0" max="1" step="0.05" value="1" title="Volume" />
+              <button id="toggle-masks" class="ctrl-btn active" title="Shortcut: M">Masks: On</button>
+              <span id="phase-indicator" class="indicator">☀️ Day</span>
+              <button id="add-phase-btn" class="ctrl-btn" title="Add night phase at current time">+ Night</button>
+              <button id="reset-masks-btn" class="ctrl-btn" title="Reset mask regions to default">Reset Masks</button>
+              <button id="reset-nights-btn" class="ctrl-btn" title="Reset night phases to default">Reset Nights</button>
+              <span class="spacer"></span>
+              <button id="fullscreen-btn" class="ctrl-btn" title="Fullscreen">⛶</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="info-bar">
+          <span id="status" class="status"></span>
+        </div>
+      </div>
+        <!-- Right sidebar: Search -->
+        <aside id="sidebar-right" class="sidebar-panel">
+          <div class="sidebar-panel-header">
+            <span class="sidebar-panel-title">Search</span>
+          </div>
+          <div id="search-bar">
+            <input id="search-input" type="text" placeholder="Search keywords" value="京城大师赛 S21" />
+            <button id="search-btn" class="ctrl-btn" title="Search">Search</button>
+          </div>
+          <ul id="search-results"></ul>
+        </aside>
+      </div><!-- end main-layout -->
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Stop the Werewolf Viewer server.
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
-PIDFILE="$DIR/.server.pid"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PIDFILE="$ROOT/.run/server.pid"
 
 if [ ! -f "$PIDFILE" ]; then
   echo "No server PID file found"

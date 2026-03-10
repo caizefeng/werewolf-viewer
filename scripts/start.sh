@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Start the Werewolf Viewer server in the background.
-# The server persists after terminal close. Logs go to server.log.
+# The server persists after terminal close. Logs go to .run/server.log.
 
 set -e
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
-PIDFILE="$DIR/.server.pid"
-LOGFILE="$DIR/server.log"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RUNDIR="$ROOT/.run"
+PIDFILE="$RUNDIR/server.pid"
+LOGFILE="$RUNDIR/server.log"
+
+mkdir -p "$RUNDIR"
 
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   echo "Server is already running (PID $(cat "$PIDFILE"))"
@@ -18,7 +21,7 @@ fi
 eval "$(fnm env --use-on-cd)"
 corepack enable
 
-cd "$DIR/web"
+cd "$ROOT/web"
 
 # Start server in background, immune to terminal close
 nohup pnpm dev > "$LOGFILE" 2>&1 &

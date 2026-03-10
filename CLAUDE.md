@@ -1,6 +1,8 @@
 # Werewolf Viewer - Development Guide
 
 > **Keep this file up to date.** When making changes to the project (code, dependencies, algorithms, commands, etc.), update the relevant sections of this file to reflect the current state.
+>
+> **Always commit after changes.** After any edit to the codebase, stage and commit the changes to git with a descriptive message.
 
 ## Project Overview
 Web-based werewolf (狼人杀) tournament video viewer that auto-detects night phases and masks character role names to avoid spoilers. Designed for 京城大师赛 (Beijing Masters) tournament videos.

@@ -11,5 +11,9 @@ __pycache__/
 node_modules/
 dist/
 
+# Server runtime
+.server.pid
+server.log
+
 # OS
 .DS_Store

@@ -11,6 +11,8 @@ Web-based werewolf (狼人杀) tournament video viewer that auto-detects night p
 ```
 werewolf_viewer/
 ├── CLAUDE.md              # This file — keep up to date with changes
+├── start.sh               # Start server in background (persists after terminal close)
+├── stop.sh                # Stop background server
 ├── processing/            # Python video analysis scripts
 │   ├── venv/              # Python virtual environment (pyenv + venv)
 │   ├── requirements.txt   # Dependencies: yt-dlp, paddleocr, paddlepaddle, opencv-python
@@ -64,8 +66,14 @@ python3 processing/analyze.py videos/<id>/video.mp4 --output-dir videos/<id>
 # Run just night detection
 python3 processing/analyze_night.py videos/<id>/video.mp4
 
-# Start web dev server (must load fnm + corepack first)
-eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev   # serves on http://0.0.0.0:5173
+# Start server in background (persists after terminal close)
+./start.sh                # serves on http://localhost:5173/
+
+# Stop background server
+./stop.sh
+
+# Start web dev server interactively (must load fnm + corepack first)
+eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 # For video IDs starting with dash, use: --video-id="-XXXX"
 ```

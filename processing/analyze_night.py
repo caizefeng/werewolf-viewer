@@ -25,7 +25,7 @@ import numpy as np
 
 RED_THRESH = 2.5   # R/G ratio indicating red ambient light (night, table view)
 ENTRY_BUFFER = 3.5  # seconds of buffer before night entry
-EXIT_BUFFER = 1.5   # seconds of buffer after night exit
+EXIT_BUFFER = 2     # seconds of buffer after night exit
 CUT_THRESH = 40    # frame diff above this = camera cut (not a lighting change)
 MIN_PHASE_DURATION = 35  # minimum raw phase duration in seconds (filters false positives)
 

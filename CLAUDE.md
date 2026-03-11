@@ -22,6 +22,7 @@ werewolf_viewer/
 │   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs (threaded)
 │   ├── analyze_names.py   # Role name detection via PaddleOCR (lazy frame sampling)
 │   ├── benchmark.py       # Performance benchmark: parallel vs sequential, ground truth validation
+│   ├── benchmark_full.py  # Comprehensive benchmark: night + name + full pipeline profiling
 │   └── download.py        # YouTube video downloader via yt-dlp
 ├── videos/                # Downloaded videos + metadata (not in git)
 │   └── <video-id>/
@@ -75,6 +76,10 @@ python3 processing/analyze_night.py videos/<id>/video.mp4 --workers 1  # sequent
 
 # Benchmark parallel vs sequential on all ground truth videos
 cd processing && python3 benchmark.py
+
+# Comprehensive benchmark: night + name detection + full pipeline profiling
+cd processing && python3 benchmark_full.py                    # all GT videos
+cd processing && python3 benchmark_full.py VIDEO_ID1 VIDEO_ID2  # specific videos
 
 # Start server in background (persists after terminal close)
 scripts/start.sh          # serves on http://localhost:5173/

@@ -5,6 +5,7 @@ videos/*
 # Python
 processing/venv/
 processing/models/
+processing/benchmarks/
 __pycache__/
 *.pyc
 
@@ -14,6 +15,10 @@ dist/
 
 # Server runtime
 .run/
+
+# Development docs (auto-maintained by Claude Code)
+CLAUDE.md
+MEMORY.md
 
 # OS
 .DS_Store

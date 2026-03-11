@@ -18,6 +18,7 @@ Algorithm:
 import argparse
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -32,31 +33,57 @@ MIN_PHASE_DURATION = 35  # minimum raw phase duration in seconds (filters false 
 SCAN_INTERVAL = 2  # seconds between sampled frames
 
 
-def scan_corner_redness(video_path):
-    """Scan at SCAN_INTERVAL: compute max R/G ratio and frame-to-frame diff.
+def _compute_rg_ratio(roi):
+    """Compute R/G color ratio for a region of interest."""
+    mean = roi.mean(axis=(0, 1))
+    return mean[2] / (mean[1] + 1)
 
-    Returns (timestamps, ratios, diffs) — parallel arrays of sampled points.
-    diffs[i] = mean absolute pixel difference between frame i and frame i-1.
+
+def _scan_segment(args):
+    """Worker function for parallel video scanning.
+
+    Processes a contiguous segment of the video, computing R/G ratios from
+    bottom corners and frame-to-frame diffs. Each worker opens its own
+    VideoCapture and seeks to its segment start.
+
+    For correct boundary diffs, workers with need_prev=True read one extra
+    frame before their segment to use as prev_frame for the first diff.
     """
+    video_path, start_sec, end_sec, scan_interval, need_prev = args
+
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    duration = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps)
+    skip = int(scan_interval * fps) - 1
+
+    prev_frame = None
+
+    if need_prev and start_sec >= scan_interval:
+        # Seek to one interval before segment start, read as prev_frame
+        prev_sec = start_sec - scan_interval
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(prev_sec * fps))
+        ret, prev_frame = cap.read()
+        if not ret:
+            prev_frame = None
+        # Advance to segment start
+        for _ in range(skip):
+            cap.grab()
+    elif start_sec > 0:
+        # Seek to segment start (no prev frame needed)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(start_sec * fps))
 
     timestamps = []
     ratios = []
     diffs = []
-    prev_frame = None
-    skip = int(SCAN_INTERVAL * fps) - 1  # frames to grab() between reads
 
-    for sec in range(0, duration, SCAN_INTERVAL):
+    for sec in range(start_sec, end_sec, scan_interval):
         ret, frame = cap.read()
         if not ret:
             break
         h, w = frame.shape[:2]
         bl = frame[int(h * 0.88):int(h * 0.93), int(w * 0.02):int(w * 0.12)]
         br = frame[int(h * 0.88):int(h * 0.93), int(w * 0.88):int(w * 0.98)]
-        rg_bl = bl.mean(axis=(0, 1))[2] / (bl.mean(axis=(0, 1))[1] + 1)
-        rg_br = br.mean(axis=(0, 1))[2] / (br.mean(axis=(0, 1))[1] + 1)
+        rg_bl = _compute_rg_ratio(bl)
+        rg_br = _compute_rg_ratio(br)
         timestamps.append(sec)
         ratios.append(max(rg_bl, rg_br))
 
@@ -66,7 +93,92 @@ def scan_corner_redness(video_path):
             diffs.append(0.0)
         prev_frame = frame
 
-        # Skip frames until next sample (grab decodes but discards pixel data)
+        # Skip frames until next sample
+        for _ in range(skip):
+            cap.grab()
+
+    cap.release()
+    return timestamps, ratios, diffs
+
+
+def scan_corner_redness(video_path, num_workers=0):
+    """Scan at SCAN_INTERVAL: compute max R/G ratio and frame-to-frame diff.
+
+    Returns (timestamps, ratios, diffs) — parallel arrays of sampled points.
+    diffs[i] = mean absolute pixel difference between frame i and frame i-1.
+
+    num_workers: 0=auto (3 threads), 1=sequential, N=use N threads.
+    Threading is used because cv2 releases the GIL during video decode.
+    """
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    duration = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps)
+    cap.release()
+
+    if num_workers == 0:
+        num_workers = 3  # optimal: diminishing returns beyond 3 threads
+
+    if num_workers == 1:
+        return _scan_sequential(video_path, fps, duration)
+
+    # Split video into segments aligned to SCAN_INTERVAL
+    total_samples = len(range(0, duration, SCAN_INTERVAL))
+    samples_per_worker = (total_samples + num_workers - 1) // num_workers
+
+    segments = []
+    for i in range(num_workers):
+        start_sample = i * samples_per_worker
+        end_sample = min((i + 1) * samples_per_worker, total_samples)
+        if start_sample >= total_samples:
+            break
+        start_sec = start_sample * SCAN_INTERVAL
+        end_sec = end_sample * SCAN_INTERVAL
+        segments.append((video_path, start_sec, end_sec, SCAN_INTERVAL, i > 0))
+
+    with ThreadPoolExecutor(max_workers=len(segments)) as pool:
+        results = list(pool.map(_scan_segment, segments))
+
+    # Concatenate results from all workers
+    all_timestamps = []
+    all_ratios = []
+    all_diffs = []
+    for ts, rs, ds in results:
+        all_timestamps.extend(ts)
+        all_ratios.extend(rs)
+        all_diffs.extend(ds)
+
+    print(f"  Sampled {len(all_timestamps)} frames ({duration}s video, "
+          f"{SCAN_INTERVAL}s interval, {len(segments)} workers)")
+    return np.array(all_timestamps), np.array(all_ratios), np.array(all_diffs)
+
+
+def _scan_sequential(video_path, fps, duration):
+    """Original sequential scanning (used when num_workers=1)."""
+    cap = cv2.VideoCapture(video_path)
+    timestamps = []
+    ratios = []
+    diffs = []
+    prev_frame = None
+    skip = int(SCAN_INTERVAL * fps) - 1
+
+    for sec in range(0, duration, SCAN_INTERVAL):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        h, w = frame.shape[:2]
+        bl = frame[int(h * 0.88):int(h * 0.93), int(w * 0.02):int(w * 0.12)]
+        br = frame[int(h * 0.88):int(h * 0.93), int(w * 0.88):int(w * 0.98)]
+        rg_bl = _compute_rg_ratio(bl)
+        rg_br = _compute_rg_ratio(br)
+        timestamps.append(sec)
+        ratios.append(max(rg_bl, rg_br))
+
+        if prev_frame is not None:
+            diffs.append(cv2.absdiff(frame, prev_frame).mean())
+        else:
+            diffs.append(0.0)
+        prev_frame = frame
+
         for _ in range(skip):
             cap.grab()
 
@@ -167,10 +279,13 @@ def filter_cut_bounded_phases(phases, timestamps, diffs, cut_thresh=CUT_THRESH):
     return result
 
 
-def analyze_night_phases(video_path):
-    """Detect night phases via bottom-corner ambient light color."""
+def analyze_night_phases(video_path, num_workers=0):
+    """Detect night phases via bottom-corner ambient light color.
+
+    num_workers: 0=auto, 1=sequential, N=use N workers for frame scanning.
+    """
     print("Scanning bottom corners for ambient light changes...")
-    timestamps, ratios, diffs = scan_corner_redness(video_path)
+    timestamps, ratios, diffs = scan_corner_redness(video_path, num_workers)
 
     if len(timestamps) == 0:
         print("No frames scanned.")
@@ -216,7 +331,9 @@ def analyze_night_phases(video_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Detect night phases in werewolf video")
     parser.add_argument("video_path", help="Path to video file")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="Number of parallel workers (0=auto, 1=sequential)")
     args = parser.parse_args()
 
-    phases = analyze_night_phases(args.video_path)
+    phases = analyze_night_phases(args.video_path, num_workers=args.workers)
     print(json.dumps(phases, indent=2, ensure_ascii=False))

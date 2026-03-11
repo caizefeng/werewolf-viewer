@@ -18,21 +18,34 @@ ROLE_NAMES = [
 
 
 def sample_frames(video_path, start_sec=60, end_sec=300, interval=1):
-    """Sample frames from video at given interval."""
+    """Yield (sec, frame) tuples from video at given interval.
+
+    Uses sequential grab/read from the start position instead of seeking
+    to each frame individually. Generator stops reading when the consumer
+    breaks out of the loop.
+    """
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = total_frames / fps
-    end_sec = min(end_sec, duration)
-    frames = []
-    for sec in range(int(start_sec), int(end_sec), interval):
-        frame_num = int(sec * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-        ret, frame = cap.read()
-        if ret:
-            frames.append((sec, frame))
-    cap.release()
-    return frames
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / fps
+        end_sec = min(end_sec, duration)
+
+        # Seek to first sample position
+        if start_sec > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(start_sec * fps))
+
+        skip = int(interval * fps) - 1
+
+        for sec in range(int(start_sec), int(end_sec), interval):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            yield (sec, frame)
+            for _ in range(skip):
+                cap.grab()
+    finally:
+        cap.release()
 
 
 def detect_names_in_frame(ocr, frame, edge_ratio=0.2):
@@ -133,22 +146,27 @@ def analyze_name_regions(video_path):
 
     # Start from 1000s (after intro) and sample every 10s
     print("Sampling frames (1000s-1300s at 10s intervals)...")
-    frames = sample_frames(video_path, start_sec=1000, end_sec=1300, interval=10)
-    print(f"Sampled {len(frames)} frames")
-
     all_regions = []
     found_any = False
+    num_sampled = 0
 
-    for sec, frame in frames:
-        regions = detect_names_in_frame(ocr, frame)
-        if regions:
-            if not found_any:
-                print(f"  First names detected at {sec}s")
-                found_any = True
-            all_regions.extend(regions)
-            if len(all_regions) >= 30:
-                print(f"  Enough samples collected at {sec}s")
-                break
+    gen = sample_frames(video_path, start_sec=1000, end_sec=1300, interval=10)
+    try:
+        for sec, frame in gen:
+            num_sampled += 1
+            regions = detect_names_in_frame(ocr, frame)
+            if regions:
+                if not found_any:
+                    print(f"  First names detected at {sec}s")
+                    found_any = True
+                all_regions.extend(regions)
+                if len(all_regions) >= 30:
+                    print(f"  Enough samples collected at {sec}s")
+                    break
+    finally:
+        gen.close()
+
+    print(f"Processed {num_sampled} frames")
 
     if not all_regions:
         print("No role names detected. Using default mask positions.")

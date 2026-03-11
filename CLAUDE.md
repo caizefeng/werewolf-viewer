@@ -18,9 +18,10 @@ werewolf_viewer/
 ├── processing/            # Python video analysis scripts
 │   ├── venv/              # Python virtual environment (pyenv + venv)
 │   ├── requirements.txt   # Dependencies: yt-dlp, paddleocr, paddlepaddle, opencv-python
-│   ├── analyze.py         # Main pipeline: runs night + name analysis
-│   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs
-│   ├── analyze_names.py   # Role name detection via PaddleOCR
+│   ├── analyze.py         # Main pipeline: runs night + name analysis (parallel by default)
+│   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs (threaded)
+│   ├── analyze_names.py   # Role name detection via PaddleOCR (lazy frame sampling)
+│   ├── benchmark.py       # Performance benchmark: parallel vs sequential, ground truth validation
 │   └── download.py        # YouTube video downloader via yt-dlp
 ├── videos/                # Downloaded videos + metadata (not in git)
 │   └── <video-id>/
@@ -62,11 +63,18 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 source processing/venv/bin/activate
 python3 processing/download.py --video-id="VIDEO_ID"
 
-# Analyze a video (generates metadata.json)
-python3 processing/analyze.py videos/<id>/video.mp4 --output-dir videos/<id>
+# Analyze a video (generates metadata.json, parallel by default)
+python3 processing/analyze.py --video-id="VIDEO_ID"
 
-# Run just night detection
+# Analyze with full sequential mode (for debugging / comparison)
+python3 processing/analyze.py --video-id="VIDEO_ID" --sequential --workers 1
+
+# Run just night detection (threaded scan by default)
 python3 processing/analyze_night.py videos/<id>/video.mp4
+python3 processing/analyze_night.py videos/<id>/video.mp4 --workers 1  # sequential
+
+# Benchmark parallel vs sequential on all ground truth videos
+cd processing && python3 benchmark.py
 
 # Start server in background (persists after terminal close)
 scripts/start.sh          # serves on http://localhost:5173/
@@ -83,7 +91,12 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 ## Algorithm Notes
 
 ### Night Phase Detection (analyze_night.py)
-- Samples frames every 2 seconds (sequential grab+read for performance)
+- Samples frames every 2 seconds using grab+read
+- **Threaded scanning**: splits video into segments, scans in parallel with `ThreadPoolExecutor`
+  - Default: 3 threads (optimal; diminishing returns beyond 3 due to I/O contention)
+  - Each thread opens its own `VideoCapture` and seeks to its segment start
+  - Boundary diffs handled correctly: each thread reads one extra frame before its segment
+  - Revert to sequential: `--workers 1`
 - Computes R/G color ratio from bottom-left and bottom-right corners
   - ROI: upper half of bottom 12% strip (h*0.88 to h*0.93), avoids UI overlays
   - Uses max(left, right) R/G ratio per frame
@@ -94,14 +107,24 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Pipeline: find_red_clusters → merge_clusters → filter_cut_bounded_phases → filter by min duration (35s) → add ±2s buffer
 - **merge_clusters**: merges adjacent red clusters when BOTH the exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary to catch cuts that land slightly offset from the red/non-red threshold
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases
-- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `MIN_PHASE_DURATION=35`, `BUFFER=2`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
-- Performance: ~1min per hour of 720p video (CPU-bound; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
+- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=3.5`, `EXIT_BUFFER=2`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
+- Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
 
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR to find Chinese role names (狼人, 预言家, 女巫, etc.)
 - Scans left/right 20% edges of frames sampled from 1000s-1300s
+- **Lazy generator**: `sample_frames` yields frames on demand, stops reading when enough names found (typically ~10 frames instead of 30)
 - Merges detected regions per side, full frame height
 - Masks only cover role name text, NOT player avatars/numbers
+
+### Pipeline Parallelism (analyze.py)
+- Default: runs night + name detection in **separate processes** (subprocess for name detection)
+  - Night detection runs in main process with threaded scanning
+  - Name detection runs as subprocess (separate GIL, no contention)
+  - Results communicated via temp JSON file; fallback to sequential on failure
+- Revert to sequential: `--sequential`
+- **Benchmarked speedup**: ~1.57x overall (91s → 58s on 62min video)
+- All 6 ground truth videos validated: parallel produces **identical** results to sequential
 
 ## Web Player Features
 - Custom video controls at z-index 20 (above overlays)

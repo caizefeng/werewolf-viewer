@@ -233,8 +233,61 @@ def _analyze(ocr, video_path):
     return merged, unique_texts
 
 
+def _ensure_models():
+    """Download OCR models to local directory if not present.
+
+    Uses PaddleOCR's built-in model resolution to download, then copies
+    from the global cache to the project-local models/ directory.
+    """
+    det_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_det")
+    rec_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_rec")
+
+    det_ok = os.path.isdir(det_dir) and os.path.exists(
+        os.path.join(det_dir, "inference.pdiparams"))
+    rec_ok = os.path.isdir(rec_dir) and os.path.exists(
+        os.path.join(rec_dir, "inference.pdiparams"))
+
+    if det_ok and rec_ok:
+        return det_dir, rec_dir
+
+    print("  Models not found locally. Downloading...")
+    os.makedirs(_MODELS_DIR, exist_ok=True)
+
+    # Use PaddleOCR with model names to trigger download to global cache,
+    # then copy to local directory
+    import shutil
+    tmp_ocr = PaddleOCR(
+        lang="ch",
+        text_detection_model_name="PP-OCRv5_server_det",
+        text_recognition_model_name="PP-OCRv5_server_rec",
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+    )
+    del tmp_ocr
+
+    # Find downloaded models in global cache
+    cache_base = os.path.expanduser("~/.paddlex/official_models")
+    for model_name in ["PP-OCRv5_server_det", "PP-OCRv5_server_rec"]:
+        src = os.path.join(cache_base, model_name)
+        dst = os.path.join(_MODELS_DIR, model_name)
+        if os.path.isdir(src) and not os.path.isdir(dst):
+            shutil.copytree(src, dst)
+            print(f"  Copied {model_name} to local models/")
+        elif os.path.isdir(src):
+            # Update existing (in case of partial download)
+            shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+            print(f"  Updated {model_name} in local models/")
+
+    return det_dir, rec_dir
+
+
 def _init_ocr():
     """Initialize PaddleOCR with local models and optimal device."""
+    # Ensure models are downloaded
+    det_dir, rec_dir = _ensure_models()
+
     # Detect GPU availability (CUDA only; PaddlePaddle has no Apple MPS support)
     device = "cpu"
     try:
@@ -246,9 +299,6 @@ def _init_ocr():
         pass
     if device == "cpu":
         print(f"  Using CPU")
-
-    det_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_det")
-    rec_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_rec")
 
     return PaddleOCR(
         text_detection_model_dir=det_dir,

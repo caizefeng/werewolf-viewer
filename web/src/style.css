@@ -590,31 +590,36 @@ header h1::after {
 
 .name-mask {
   position: absolute;
-  background: linear-gradient(
-    180deg,
-    #0e0d18 0%,
-    #12111e 40%,
-    #0e0d18 100%
-  );
-  border-left: 1px solid rgba(133, 120, 246, 0.08);
-  border-right: 1px solid rgba(133, 120, 246, 0.08);
+  background:
+    linear-gradient(180deg,
+      #08070f 0%,
+      #0d0c16 8%,
+      #100f1c 50%,
+      #0d0c16 92%,
+      #08070f 100%
+    );
+  border-left: 1px solid rgba(224, 72, 72, 0.06);
+  border-right: 1px solid rgba(224, 72, 72, 0.06);
+  box-shadow:
+    inset 2px 0 12px rgba(224, 72, 72, 0.03),
+    inset -2px 0 12px rgba(224, 72, 72, 0.03);
   transition: opacity 0.3s ease;
   pointer-events: none;
   overflow: hidden;
 }
 
-/* Subtle vertical texture on opaque mask */
+/* Inner vignette — darkened edges with faint crimson bleed */
 .name-mask::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: repeating-linear-gradient(
-    180deg,
-    transparent,
-    transparent 3px,
-    rgba(133, 120, 246, 0.015) 3px,
-    rgba(133, 120, 246, 0.015) 4px
-  );
+  background:
+    linear-gradient(90deg,
+      rgba(224, 72, 72, 0.04) 0%,
+      transparent 30%,
+      transparent 70%,
+      rgba(224, 72, 72, 0.04) 100%
+    );
   pointer-events: none;
 }
 

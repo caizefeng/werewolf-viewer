@@ -510,23 +510,13 @@ export class WerewolfPlayer {
 
   _addNameMask() {
     if (!this.metadata) return;
-    // Default: place new mask at a reasonable position
-    // Check which side has fewer masks to suggest placement
-    const existing = this.metadata.name_masks || [];
-    const leftCount = existing.filter((m) => m.x < 0.5).length;
-    const rightCount = existing.filter((m) => m.x >= 0.5).length;
-
-    let newMask;
-    if (leftCount <= rightCount) {
-      newMask = { x: 0.06, y: 0, w: 0.08, h: 1.0 };
-    } else {
-      newMask = { x: 0.86, y: 0, w: 0.08, h: 1.0 };
-    }
+    // Place new mask at center of video so it's immediately visible and easy to drag
+    const newMask = { x: 0.42, y: 0, w: 0.16, h: 1.0 };
 
     this.metadata.name_masks.push(newMask);
     this.createNameMasks();
     this._updateMaskVisibility(this.video.currentTime);
-    this.statusEl.textContent = `Added mask region (${leftCount <= rightCount ? "left" : "right"} side). Drag edges to adjust.`;
+    this.statusEl.textContent = "Added mask at center. Drag edges to position it.";
   }
 
   // ── Reset defaults ──

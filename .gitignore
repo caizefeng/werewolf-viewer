@@ -4,6 +4,7 @@ videos/*
 
 # Python
 processing/venv/
+processing/models/
 __pycache__/
 *.pyc
 

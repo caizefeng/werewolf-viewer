@@ -590,11 +590,31 @@ header h1::after {
 
 .name-mask {
   position: absolute;
-  background: rgba(12, 11, 20, 0.72);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(
+    180deg,
+    #0e0d18 0%,
+    #12111e 40%,
+    #0e0d18 100%
+  );
+  border-left: 1px solid rgba(133, 120, 246, 0.08);
+  border-right: 1px solid rgba(133, 120, 246, 0.08);
   transition: opacity 0.3s ease;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Subtle vertical texture on opaque mask */
+.name-mask::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent,
+    transparent 3px,
+    rgba(133, 120, 246, 0.015) 3px,
+    rgba(133, 120, 246, 0.015) 4px
+  );
   pointer-events: none;
 }
 
@@ -634,6 +654,37 @@ header h1::after {
 
 .mask-hover-zone:hover .resize-handle {
   opacity: 0.8;
+}
+
+/* Delete button on name masks */
+.mask-delete-btn {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 20px;
+  background: rgba(224, 72, 72, 0.85);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+  pointer-events: auto;
+  z-index: 2;
+}
+
+.name-mask:hover .mask-delete-btn {
+  opacity: 1;
+}
+
+.mask-delete-btn:hover {
+  background: var(--error);
+  transform: translateX(-50%) scale(1.15);
 }
 
 .name-mask .resize-handle.handle-right {

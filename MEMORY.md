@@ -2,6 +2,26 @@
 
 ## 2026-03-11
 
+### OCR optimization: local models, no-aux, shifted range, opaque masks, add-mask UI
+- **analyze_names.py**: Major refactoring
+  - Moved OCR models to `processing/models/` (self-contained, no global cache dependency)
+  - Uses `text_detection_model_dir` / `text_recognition_model_dir` params to load from local dir
+  - Disabled aux preprocessing models (doc orientation, unwarping, textline orientation)
+  - Added `_init_ocr()` with CUDA GPU fallback (PaddlePaddle has no Apple MPS support)
+  - Shifted primary scan range from 1000-1300s to 1100-1400s (fixes Xk65eicHSyw, no regressions on 8 videos)
+  - Added extended scan: if one side missing after primary range, extends to 1400-2000s at 30s intervals
+  - Extracted `_scan_range()` helper for reuse between primary and extended scans
+- **Benchmark findings** (benchmark_ocr.py):
+  - No-aux is 1.18x faster than with-aux, fixes detection on Xk65eicHSyw
+  - Mobile models only 1.23x faster, not worth accuracy tradeoff
+  - All configs run locally — PaddleOCR has no remote API
+- **Web UI changes**:
+  - Name masks now opaque (dark gradient with subtle line texture, no blur/transparency)
+  - Added "+ Mask" button to manually add mask regions
+  - Masks have × delete button on hover
+- Cleaned up unused models from `~/.paddlex/official_models/` (kept only v5 server det+rec)
+- Added `processing/models/` to `.gitignore` (165MB binary files)
+
 ### Polished web UI with frontend-design plugin
 - **web/src/style.css**: Complete rewrite with CSS custom properties design system
   - Replaced all hardcoded colors with `:root` variables

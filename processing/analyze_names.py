@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 from paddleocr import PaddleOCR
 
+# Local model directory (self-contained, no global cache dependency)
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 ROLE_NAMES = [
     "狼人", "狼王", "白狼王", "预言家", "女巫", "猎人",
@@ -139,18 +141,22 @@ def merge_regions(all_regions):
     return merged
 
 
-def analyze_name_regions(video_path):
-    """Main entry point: sample frames, OCR, merge regions."""
-    print("Initializing PaddleOCR...")
-    ocr = PaddleOCR(lang="ch")
+def analyze_name_regions_with_ocr(ocr, video_path):
+    """Run name detection with a pre-initialized OCR instance.
 
-    # Start from 1000s (after intro) and sample every 10s
-    print("Sampling frames (1000s-1300s at 10s intervals)...")
+    Returns (masks, unique_texts) tuple.
+    """
+    return _analyze(ocr, video_path)
+
+
+def _scan_range(ocr, video_path, start_sec, end_sec, interval, target_count=30):
+    """Scan a time range for name regions. Returns (regions, num_sampled)."""
     all_regions = []
     found_any = False
     num_sampled = 0
 
-    gen = sample_frames(video_path, start_sec=1000, end_sec=1300, interval=10)
+    gen = sample_frames(video_path, start_sec=start_sec, end_sec=end_sec,
+                        interval=interval)
     try:
         for sec, frame in gen:
             num_sampled += 1
@@ -160,20 +166,62 @@ def analyze_name_regions(video_path):
                     print(f"  First names detected at {sec}s")
                     found_any = True
                 all_regions.extend(regions)
-                if len(all_regions) >= 30:
+                if len(all_regions) >= target_count:
                     print(f"  Enough samples collected at {sec}s")
                     break
     finally:
         gen.close()
 
+    return all_regions, num_sampled
+
+
+def _analyze(ocr, video_path):
+    """Core analysis logic shared by public entry points.
+
+    Returns (masks, unique_texts) where unique_texts is a set of detected
+    role name strings.
+
+    Scans 1100s-1400s first. If both sides aren't found, extends the scan
+    to 1400s-2000s with a coarser interval to find late-appearing names.
+    """
+    # Primary scan: 1100s-1400s at 10s intervals
+    print("Sampling frames (1100s-1400s at 10s intervals)...")
+    all_regions, num_sampled = _scan_range(
+        ocr, video_path, 1100, 1400, interval=10)
     print(f"Processed {num_sampled} frames")
+
+    # Check if we have both sides covered
+    sides_found = set(r["side"] for r in all_regions)
+    missing_sides = {"left", "right"} - sides_found
+
+    if missing_sides and all_regions:
+        # Found names on one side but not the other — extend scan
+        print(f"  Missing {', '.join(missing_sides)} side. "
+              f"Extending scan (1400s-2000s at 30s intervals)...")
+        extra_regions, extra_sampled = _scan_range(
+            ocr, video_path, 1400, 2000, interval=30, target_count=15)
+        num_sampled += extra_sampled
+        # Only add regions from the missing side(s)
+        for r in extra_regions:
+            if r["side"] in missing_sides:
+                all_regions.append(r)
+        print(f"  Extended scan: {extra_sampled} more frames")
+
+    if not all_regions:
+        # No names at all — try the extended range before falling back
+        print("  No names in primary range. Trying extended scan "
+              "(1400s-2000s at 30s intervals)...")
+        all_regions, extra_sampled = _scan_range(
+            ocr, video_path, 1400, 2000, interval=30, target_count=15)
+        num_sampled += extra_sampled
+        print(f"  Extended scan: {extra_sampled} frames")
 
     if not all_regions:
         print("No role names detected. Using default mask positions.")
         return [
             {"x": 0.05, "y": 0, "w": 0.08, "h": 1.0},
             {"x": 0.87, "y": 0, "w": 0.08, "h": 1.0},
-        ]
+        ], set()
 
     unique_texts = set(r["text"] for r in all_regions)
     print(f"Detected texts: {', '.join(unique_texts)}")
@@ -182,7 +230,42 @@ def analyze_name_regions(video_path):
     print(f"Merged into {len(merged)} mask region(s)")
     for m in merged:
         print(f"  x={m['x']:.3f} y={m['y']:.3f} w={m['w']:.3f} h={m['h']:.3f}")
-    return merged
+    return merged, unique_texts
+
+
+def _init_ocr():
+    """Initialize PaddleOCR with local models and optimal device."""
+    # Detect GPU availability (CUDA only; PaddlePaddle has no Apple MPS support)
+    device = "cpu"
+    try:
+        import paddle
+        if paddle.device.is_compiled_with_cuda():
+            device = "gpu:0"
+            print(f"  Using GPU (CUDA)")
+    except Exception:
+        pass
+    if device == "cpu":
+        print(f"  Using CPU")
+
+    det_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_det")
+    rec_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_rec")
+
+    return PaddleOCR(
+        text_detection_model_dir=det_dir,
+        text_recognition_model_dir=rec_dir,
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        device=device,
+    )
+
+
+def analyze_name_regions(video_path):
+    """Main entry point: sample frames, OCR, merge regions."""
+    print("Initializing PaddleOCR...")
+    ocr = _init_ocr()
+    masks, _texts = _analyze(ocr, video_path)
+    return masks
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ export class WerewolfPlayer {
     this.progressBuffered = elements.progressBuffered;
     this.nightMarkersEl = elements.nightMarkers;
     this.addPhaseBtn = elements.addPhaseBtn;
+    this.addMaskBtn = elements.addMaskBtn;
     this.resetMasksBtn = elements.resetMasksBtn;
     this.resetNightsBtn = elements.resetNightsBtn;
     this.nightJumpButtons = elements.nightJumpButtons;
@@ -81,6 +82,9 @@ export class WerewolfPlayer {
 
     // Add night phase
     this.addPhaseBtn.addEventListener("click", () => this._addNightPhase());
+
+    // Add mask
+    this.addMaskBtn.addEventListener("click", () => this._addNameMask());
 
     // Reset buttons
     this.resetMasksBtn.addEventListener("click", () => this._resetMasks());
@@ -155,6 +159,23 @@ export class WerewolfPlayer {
       outerZone.appendChild(outerHandle);
       el.appendChild(outerZone);
       this._bindMaskResize(el, outerHandle, mask, `handle-${outerSide}`);
+
+      // Delete button (visible on hover)
+      const delBtn = document.createElement("button");
+      delBtn.className = "mask-delete-btn";
+      delBtn.textContent = "×";
+      delBtn.title = "Remove this mask";
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = this.metadata.name_masks.indexOf(mask);
+        if (idx !== -1) {
+          this.metadata.name_masks.splice(idx, 1);
+          this.createNameMasks();
+          this._updateMaskVisibility(this.video.currentTime);
+          this.statusEl.textContent = `Removed mask region`;
+        }
+      });
+      el.appendChild(delBtn);
 
       this.nameMasksContainer.appendChild(el);
     }
@@ -485,6 +506,27 @@ export class WerewolfPlayer {
     this._renderNightMarkers();
     this._onTimeUpdate();
     this.statusEl.textContent = `Added night phase: ${this._fmt(start)} – ${this._fmt(end)}`;
+  }
+
+  _addNameMask() {
+    if (!this.metadata) return;
+    // Default: place new mask at a reasonable position
+    // Check which side has fewer masks to suggest placement
+    const existing = this.metadata.name_masks || [];
+    const leftCount = existing.filter((m) => m.x < 0.5).length;
+    const rightCount = existing.filter((m) => m.x >= 0.5).length;
+
+    let newMask;
+    if (leftCount <= rightCount) {
+      newMask = { x: 0.06, y: 0, w: 0.08, h: 1.0 };
+    } else {
+      newMask = { x: 0.86, y: 0, w: 0.08, h: 1.0 };
+    }
+
+    this.metadata.name_masks.push(newMask);
+    this.createNameMasks();
+    this._updateMaskVisibility(this.video.currentTime);
+    this.statusEl.textContent = `Added mask region (${leftCount <= rightCount ? "left" : "right"} side). Drag edges to adjust.`;
   }
 
   // ── Reset defaults ──

@@ -22,6 +22,7 @@ function getElements() {
     progressBuffered: document.getElementById("progress-buffered"),
     nightMarkers: document.getElementById("night-markers"),
     addPhaseBtn: document.getElementById("add-phase-btn"),
+    addMaskBtn: document.getElementById("add-mask-btn"),
     resetMasksBtn: document.getElementById("reset-masks-btn"),
     resetNightsBtn: document.getElementById("reset-nights-btn"),
     nightJumpButtons: document.getElementById("night-jump-buttons"),

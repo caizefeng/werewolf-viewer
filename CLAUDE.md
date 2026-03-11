@@ -21,8 +21,12 @@ werewolf_viewer/
 │   ├── analyze.py         # Main pipeline: runs night + name analysis (parallel by default)
 │   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs (threaded)
 │   ├── analyze_names.py   # Role name detection via PaddleOCR (lazy frame sampling)
+│   ├── models/            # Local PaddleOCR model weights (gitignored, ~165MB)
+│   │   ├── PP-OCRv5_server_det/  # Text detection model
+│   │   └── PP-OCRv5_server_rec/  # Text recognition model (Chinese)
 │   ├── benchmark.py       # Performance benchmark: parallel vs sequential, ground truth validation
 │   ├── benchmark_full.py  # Comprehensive benchmark: night + name + full pipeline profiling
+│   ├── benchmark_ocr.py   # OCR model configuration benchmark (server vs mobile, aux vs no-aux)
 │   └── download.py        # YouTube video downloader via yt-dlp
 ├── videos/                # Downloaded videos + metadata (not in git)
 │   └── <video-id>/
@@ -116,9 +120,13 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
 
 ### Name Mask Detection (analyze_names.py)
-- Uses PaddleOCR to find Chinese role names (狼人, 预言家, 女巫, etc.)
-- Scans left/right 20% edges of frames sampled from 1000s-1300s
-- **Lazy generator**: `sample_frames` yields frames on demand, stops reading when enough names found (typically ~10 frames instead of 30)
+- Uses PaddleOCR (PP-OCRv5 server det+rec) to find Chinese role names (狼人, 预言家, 女巫, etc.)
+- **Local models**: weights stored in `processing/models/` (self-contained, no global cache dependency)
+- **No aux models**: doc orientation, unwarping, textline orientation disabled (designed for scanned docs, hurt video frame detection)
+- **Device fallback**: uses CUDA GPU if available, falls back to CPU (PaddlePaddle has no Apple MPS support)
+- Scans left/right 20% edges of frames sampled from **1100s-1400s** (shifted from 1000-1300 for better generalizability)
+- **Extended scan**: if one side is missing after primary range, extends to 1400s-2000s at 30s intervals
+- **Lazy generator**: `sample_frames` yields frames on demand, stops reading when enough names found (typically ~4 frames instead of 30)
 - Merges detected regions per side, full frame height
 - Masks only cover role name text, NOT player avatars/numbers
 
@@ -134,8 +142,9 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 ## Web Player Features
 - Custom video controls at z-index 20 (above overlays)
 - Night overlay: black screen during night phases
-- Name masks: visible only after first night ends, hidden during nights
-- Masks are resizable via drag handles on edges
+- Name masks: opaque overlay, visible only after first night ends, hidden during nights
+- Masks are resizable via drag handles on edges, deletable via × button on hover
+- "+ Mask" button to manually add mask regions when auto-detection fails
 - Night phase markers on progress bar (red segments, draggable handles)
 - Fullscreen via Fullscreen API on wrapper element
 - Sidebar with two tabs: video list + download management

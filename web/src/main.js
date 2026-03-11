@@ -36,6 +36,17 @@ async function loadVideoList() {
     const res = await fetch("/api/videos");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const videos = await res.json();
+    const cnNum = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
+    const sortKey = (t) => {
+      const m = t.match(/第(.)局/);
+      // Primary key: everything before 第X局 (episode prefix)
+      const prefix = m ? t.slice(0, m.index).trimEnd() : t;
+      return { prefix, game: m ? (cnNum[m[1]] || 0) : 0 };
+    };
+    videos.sort((a, b) => {
+      const ka = sortKey(a.title), kb = sortKey(b.title);
+      return ka.prefix.localeCompare(kb.prefix, "zh") || ka.game - kb.game;
+    });
 
     list.innerHTML = "";
     for (const v of videos) {

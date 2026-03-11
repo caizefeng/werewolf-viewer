@@ -415,11 +415,12 @@ export class WerewolfPlayer {
       .sort((a, b) => a.start - b.start);
 
     sorted.forEach((phase, i) => {
-      if (i > 0) {
-        const sep = document.createElement("div");
-        sep.className = "night-jump-sep";
-        this.nightJumpButtons.appendChild(sep);
-      }
+      const group = document.createElement("div");
+      group.className = "night-jump-group";
+
+      const label = document.createElement("span");
+      label.className = "night-jump-label";
+      label.textContent = i + 1;
 
       const startBtn = document.createElement("button");
       startBtn.className = "night-jump-btn";
@@ -437,8 +438,10 @@ export class WerewolfPlayer {
         this.video.currentTime = phase.end;
       });
 
-      this.nightJumpButtons.appendChild(startBtn);
-      this.nightJumpButtons.appendChild(endBtn);
+      group.appendChild(label);
+      group.appendChild(startBtn);
+      group.appendChild(endBtn);
+      this.nightJumpButtons.appendChild(group);
     });
   }
 

@@ -125,6 +125,7 @@ export default defineConfig({
             const dlProc = spawn(venvPython, dlArgs, {
               cwd: processingDir,
               stdio: ["ignore", "pipe", "pipe"],
+              detached: true,
             });
             activeJob.proc = dlProc;
 
@@ -132,7 +133,7 @@ export default defineConfig({
             dlProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
 
             dlProc.on("close", (code) => {
-              if (!activeJob || activeJob.videoId !== videoId) return;
+              if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
               if (code !== 0) {
                 // Extract last meaningful lines from log for error context
                 const logTail = activeJob.log
@@ -159,6 +160,7 @@ export default defineConfig({
               ], {
                 cwd: processingDir,
                 stdio: ["ignore", "pipe", "pipe"],
+                detached: true,
               });
               activeJob.proc = anProc;
 
@@ -166,7 +168,7 @@ export default defineConfig({
               anProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
 
               anProc.on("close", (code2) => {
-                if (!activeJob || activeJob.videoId !== videoId) return;
+                if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
                 if (code2 !== 0) {
                   const logTail = activeJob.log
                     .join("")
@@ -204,7 +206,8 @@ export default defineConfig({
           if (url === "/api/stop" && req.method === "POST") {
             if (!activeJob || activeJob.done) return jsonResponse(res, 200, { stopped: false });
             if (activeJob.proc) {
-              activeJob.proc.kill("SIGTERM");
+              // Kill entire process group (python + yt-dlp/analyze subprocesses)
+              try { process.kill(-activeJob.proc.pid, "SIGTERM"); } catch {}
             }
             activeJob.error = "Stopped by user";
             activeJob.stopped = true;

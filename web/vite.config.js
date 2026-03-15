@@ -209,6 +209,11 @@ export default defineConfig({
               // Kill entire process group (python + yt-dlp/analyze subprocesses)
               try { process.kill(-activeJob.proc.pid, "SIGTERM"); } catch {}
             }
+            // Clean up partial download directory
+            const jobDir = path.join(videosDir, activeJob.videoId);
+            if (fs.existsSync(jobDir)) {
+              fs.rmSync(jobDir, { recursive: true, force: true });
+            }
             activeJob.error = "Stopped by user";
             activeJob.stopped = true;
             activeJob.done = true;

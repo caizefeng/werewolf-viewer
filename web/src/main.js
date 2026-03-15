@@ -309,6 +309,12 @@ function updateButtonState(videoId, state) {
     btn.replaceWith(btn.cloneNode(true));
     const newBtn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
     newBtn.addEventListener("click", () => startDownload(videoId));
+  } else if (state === "stopped") {
+    btn.textContent = "Download";
+    btn.disabled = false;
+    btn.replaceWith(btn.cloneNode(true));
+    const newBtn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
+    newBtn.addEventListener("click", () => startDownload(videoId));
   }
 }
 
@@ -355,7 +361,12 @@ function startJobPolling(videoId) {
         jobPollTimer = null;
         stopElapsedTicker();
 
-        if (status.error) {
+        if (status.stopped) {
+          // User-initiated stop: reset to downloadable state
+          const step = lastPhase === "downloading" ? "download" : "analysis";
+          setStepState(vid, step, "", "");
+          updateButtonState(vid, "stopped");
+        } else if (status.error) {
           const step = lastPhase === "downloading" ? "download" : "analysis";
           setStepState(vid, step, "error", "");
           showErrorMessage(vid, status.error);

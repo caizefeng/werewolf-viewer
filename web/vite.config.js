@@ -195,6 +195,7 @@ export default defineConfig({
               phase: activeJob.phase,
               done: activeJob.done,
               error: activeJob.error,
+              stopped: activeJob.stopped || false,
               phaseStartedAt: activeJob.phaseStartedAt,
             });
           }
@@ -206,6 +207,7 @@ export default defineConfig({
               activeJob.proc.kill("SIGTERM");
             }
             activeJob.error = "Stopped by user";
+            activeJob.stopped = true;
             activeJob.done = true;
             activeJob.proc = null;
             return jsonResponse(res, 200, { stopped: true });

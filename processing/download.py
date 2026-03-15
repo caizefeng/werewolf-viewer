@@ -35,11 +35,11 @@ def download_video(video_id, output_dir, quality="1080"):
         json.dump({"title": title, "video_id": video_id}, f, ensure_ascii=False, indent=2)
     print(f"Title: {title}")
 
-    # Format selection based on quality
+    # Format selection based on quality (no fallback to pre-merged 360p)
     if quality == "1080":
-        format_spec = "bestvideo[height<=1080][fps<=60]+bestaudio/best[height<=1080]"
+        format_spec = "bestvideo[height<=1080][fps<=60]+bestaudio"
     else:
-        format_spec = "bestvideo[height<=720][fps<=60]+bestaudio/best[height<=720]"
+        format_spec = "bestvideo[height<=720][fps<=60]+bestaudio"
 
     cmd = [
         "yt-dlp",

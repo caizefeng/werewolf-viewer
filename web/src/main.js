@@ -221,6 +221,9 @@ function showProgress(videoId) {
   el.classList.add("visible");
   el.querySelectorAll(".step-fill").forEach((f) => (f.className = "step-fill"));
   el.querySelectorAll(".step-time").forEach((t) => (t.textContent = ""));
+  // Clear any previous error message
+  const existing = el.querySelector(".sr-error-msg");
+  if (existing) existing.remove();
 }
 
 function setStepState(videoId, stepName, state, timeText) {
@@ -230,6 +233,19 @@ function setStepState(videoId, stepName, state, timeText) {
   if (!step) return;
   step.querySelector(".step-fill").className = `step-fill ${state}`;
   if (timeText !== undefined) step.querySelector(".step-time").textContent = timeText;
+}
+
+function showErrorMessage(videoId, message) {
+  const el = getProgressEl(videoId);
+  if (!el) return;
+  // Remove any existing error message
+  const existing = el.querySelector(".sr-error-msg");
+  if (existing) existing.remove();
+  // Add error message below progress bars
+  const msgEl = document.createElement("div");
+  msgEl.className = "sr-error-msg";
+  msgEl.textContent = message;
+  el.appendChild(msgEl);
 }
 
 async function startDownload(videoId) {
@@ -335,6 +351,7 @@ function startJobPolling(videoId) {
         if (status.error) {
           const step = lastPhase === "downloading" ? "download" : "analysis";
           setStepState(vid, step, "error", "");
+          showErrorMessage(vid, status.error);
           updateButtonState(vid, "error");
         } else {
           const elapsed = formatElapsed(Date.now() - phaseStartTime);

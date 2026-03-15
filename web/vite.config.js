@@ -134,7 +134,15 @@ export default defineConfig({
             dlProc.on("close", (code) => {
               if (!activeJob || activeJob.videoId !== videoId) return;
               if (code !== 0) {
-                activeJob.error = `Download failed (exit ${code})`;
+                // Extract last meaningful lines from log for error context
+                const logTail = activeJob.log
+                  .join("")
+                  .split("\n")
+                  .filter((l) => l.trim())
+                  .slice(-3)
+                  .join("\n")
+                  .trim();
+                activeJob.error = logTail || `Download failed (exit ${code})`;
                 activeJob.done = true;
                 activeJob.proc = null;
                 return;
@@ -160,7 +168,14 @@ export default defineConfig({
               anProc.on("close", (code2) => {
                 if (!activeJob || activeJob.videoId !== videoId) return;
                 if (code2 !== 0) {
-                  activeJob.error = `Analysis failed (exit ${code2})`;
+                  const logTail = activeJob.log
+                    .join("")
+                    .split("\n")
+                    .filter((l) => l.trim())
+                    .slice(-3)
+                    .join("\n")
+                    .trim();
+                  activeJob.error = logTail || `Analysis failed (exit ${code2})`;
                 }
                 activeJob.phase = "done";
                 activeJob.done = true;

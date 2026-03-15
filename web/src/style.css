@@ -395,6 +395,21 @@ header h1::after {
   font-variant-numeric: tabular-nums;
 }
 
+.sr-error-msg {
+  margin-top: 4px;
+  padding: 4px 6px;
+  font-size: 0.65rem;
+  line-height: 1.35;
+  color: var(--error);
+  background: rgba(224, 72, 72, 0.08);
+  border: 1px solid rgba(224, 72, 72, 0.15);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 4.2em;
+  overflow-y: auto;
+}
+
 /* ── Video list ── */
 #video-list {
   list-style: none;

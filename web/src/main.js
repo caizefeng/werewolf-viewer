@@ -244,7 +244,14 @@ function showErrorMessage(videoId, message) {
   // Add error message below progress bars
   const msgEl = document.createElement("div");
   msgEl.className = "sr-error-msg";
-  msgEl.textContent = message;
+  const errorText = document.createElement("div");
+  errorText.className = "sr-error-text";
+  errorText.textContent = message;
+  const hint = document.createElement("div");
+  hint.className = "sr-error-hint";
+  hint.textContent = "YouTube may be limiting format access. Try again in a few minutes.";
+  msgEl.appendChild(errorText);
+  msgEl.appendChild(hint);
   el.appendChild(msgEl);
 }
 

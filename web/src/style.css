@@ -1036,7 +1036,31 @@ header h1::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  line-height: 1;
+}
+
+.icon-play {
+  display: block;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 6px 0 6px 10px;
+  border-color: transparent transparent transparent var(--text-primary);
+  margin-left: 2px;
+}
+
+.icon-pause {
+  display: flex;
+  gap: 3px;
+}
+
+.icon-pause::before,
+.icon-pause::after {
+  content: "";
+  display: block;
+  width: 3px;
+  height: 12px;
+  background: var(--text-primary);
+  border-radius: 1px;
 }
 
 #time-display {

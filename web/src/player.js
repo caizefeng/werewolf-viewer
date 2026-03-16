@@ -236,7 +236,9 @@ export class WerewolfPlayer {
   }
 
   _updatePlayBtn() {
-    this.playBtn.textContent = this.video.paused ? "▶" : "⏸";
+    this.playBtn.innerHTML = this.video.paused
+      ? '<span class="icon-play"></span>'
+      : '<span class="icon-pause"></span>';
   }
 
   // ── Custom controls: time ──

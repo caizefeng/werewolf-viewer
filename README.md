@@ -18,9 +18,14 @@ Built for [京城大师赛 (Beijing Masters)](https://www.youtube.com/@JCDSS) to
 
 The system samples video frames every 2 seconds and measures the red-to-green color ratio in the bottom corners of the frame. Werewolf games use distinctive red ambient lighting during night phases (R/G ratio ≥ 2.5 vs ~1.0 during day). Frame-to-frame pixel diffs distinguish real lighting transitions from camera cuts.
 
+Clusters of red frames are merged into night phases using two criteria:
+- **Camera cut detection**: if both boundaries of a gap are camera cuts (high frame diff), the gap is close-up shots during an ongoing night
+- **Elevated R/G in gap**: if R/G stays above 1.3 across the gap (close-up shots have R/G ~1.5-2.1 vs daytime ~1.0-1.2), the night never truly ended
+
+Key stats:
 - 3-thread parallel scanning for ~1.5x speedup
 - ~40 seconds processing per hour of 720p video
-- Validated against 6 ground truth videos with 100% accuracy (0 false positives, 0 misses)
+- Validated against 7 ground truth videos with 100% accuracy (0 false positives, 0 misses)
 
 ### Role Name Detection
 
@@ -106,6 +111,8 @@ werewolf-viewer/
 │   ├── analyze_night.py     # Night phase detection (R/G ratio + frame diffs)
 │   ├── analyze_names.py     # Role name detection (PaddleOCR)
 │   ├── download.py          # YouTube video downloader (yt-dlp)
+│   ├── benchmark.py         # Performance & accuracy benchmarks
+│   ├── benchmark_full.py    # Comprehensive pipeline profiling
 │   └── requirements.txt
 ├── web/                     # Vite + vanilla JS frontend
 │   ├── index.html
@@ -143,7 +150,9 @@ Key constants in `processing/analyze_night.py`:
 | Constant | Default | Description |
 |----------|---------|-------------|
 | `RED_THRESH` | 2.5 | R/G ratio threshold for night detection |
+| `GAP_RED_THRESH` | 1.3 | Min R/G in gap to merge clusters (close-up shots) |
 | `CUT_THRESH` | 40 | Frame diff threshold for camera cuts |
+| `MAX_MERGE_GAP` | 100 | Max gap duration (seconds) for ratio-based merging |
 | `MIN_PHASE_DURATION` | 35 | Minimum night phase duration in seconds |
 | `SCAN_INTERVAL` | 2 | Frame sampling interval in seconds |
 | `ENTRY_BUFFER` | 3.5 | Seconds added before detected night start |

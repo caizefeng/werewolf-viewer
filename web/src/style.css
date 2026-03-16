@@ -1023,6 +1023,11 @@ header h1::after {
   box-shadow: 0 0 12px rgba(133, 120, 246, 0.15);
 }
 
+#play-btn {
+  width: 2.2em;
+  text-align: center;
+}
+
 #time-display {
   font-size: 0.78rem;
   color: var(--text-secondary);

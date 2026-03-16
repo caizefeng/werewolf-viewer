@@ -1025,7 +1025,9 @@ header h1::after {
 
 #play-btn {
   width: 2.2em;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 #time-display {

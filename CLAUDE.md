@@ -114,9 +114,9 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   - Real day/night transitions: small diff (~20-30), same scene with lighting change
   - Camera cuts (close-up ↔ table): large diff (~60-80), different scene
 - Pipeline: find_red_clusters → merge_clusters → filter_cut_bounded_phases → filter by min duration (35s) → add ±2s buffer
-- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, OR (2) the gap is short (≤30s) and the minimum R/G ratio in the gap stays above GAP_RED_THRESH (1.8), indicating the lighting is still reddish and night never truly ended
+- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, OR (2) the gap is ≤100s and the minimum R/G ratio in the gap stays above GAP_RED_THRESH (1.3), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2)
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases
-- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.8`, `MAX_MERGE_GAP=30`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=3.5`, `EXIT_BUFFER=2`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
+- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `MAX_MERGE_GAP=100`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=3.5`, `EXIT_BUFFER=2`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
 - Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
 
 ### Name Mask Detection (analyze_names.py)
@@ -163,7 +163,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 5 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current algorithm.
+All 7 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current algorithm.
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05
@@ -201,3 +201,9 @@ All 5 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current a
 - 42:10 -- 46:00
 - 1:10:52 -- 1:13:36
 - 1:29:18 -- 1:31:22
+
+### F2J0QK_3gUo
+- 10:24 -- 14:14
+- 28:09 -- 31:20
+- 31:47 -- 34:28
+- 59:30 -- 60:40

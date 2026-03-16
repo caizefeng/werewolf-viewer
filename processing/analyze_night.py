@@ -221,13 +221,13 @@ def _max_diff_in_window(diffs, center_idx, half_window=CUT_WINDOW // 2):
     return max(diffs[lo:hi]) if hi > lo else 0
 
 
-GAP_RED_THRESH = 1.8  # min R/G ratio in gap to consider it "still reddish"
-MAX_MERGE_GAP = 30    # max gap duration (seconds) for ratio-based merging
+GAP_RED_THRESH = 1.3  # min R/G ratio in gap to consider it "still night" (close-up shots)
+MAX_MERGE_GAP = 100   # max gap duration (seconds) for ratio-based merging
 
 
 def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
     """Merge clusters whose boundaries are camera cuts (not real lighting changes),
-    or whose gap still has elevated R/G ratios (borderline red, night never ended).
+    or whose gap still has elevated R/G ratios (night never ended, just close-ups).
 
     Uses frame-to-frame pixel difference to distinguish:
     - Camera cuts (large diff): close-up ↔ table view during same night → merge
@@ -240,9 +240,9 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
     inside the cluster).  If BOTH the exit and entry are camera cuts,
     the gap is close-ups during an ongoing night → merge.
 
-    Also merges when the gap is short and the R/G ratio stays elevated
-    (min ratio in gap >= GAP_RED_THRESH), indicating the lighting is still
-    reddish and night never truly ended — just a brief dip below RED_THRESH.
+    Also merges when the gap R/G ratio stays elevated (min ≥ GAP_RED_THRESH),
+    indicating the camera is on close-up shots during an ongoing night.
+    Close-up R/G (~1.5-2.1) is clearly above daytime (~1.0-1.2).
     """
     if not clusters:
         return []
@@ -261,7 +261,7 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
             merged[-1] = (merged[-1][0], ce)
             continue
 
-        # Short gap with elevated R/G ratios → night never ended
+        # Gap with elevated R/G ratios → close-up shots during night
         gap_duration = cs - prev_end
         if gap_duration <= MAX_MERGE_GAP and exit_idx < entry_idx:
             gap_ratios = ratios[exit_idx:entry_idx]

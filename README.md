@@ -111,8 +111,7 @@ werewolf-viewer/
 │   ├── analyze_night.py     # Night phase detection (R/G ratio + frame diffs)
 │   ├── analyze_names.py     # Role name detection (PaddleOCR)
 │   ├── download.py          # YouTube video downloader (yt-dlp)
-│   ├── benchmark.py         # Performance & accuracy benchmarks
-│   ├── benchmark_full.py    # Comprehensive pipeline profiling
+│   ├── benchmarks/          # Performance & accuracy benchmarks
 │   └── requirements.txt
 ├── web/                     # Vite + vanilla JS frontend
 │   ├── index.html

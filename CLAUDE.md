@@ -114,9 +114,9 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   - Real day/night transitions: small diff (~20-30), same scene with lighting change
   - Camera cuts (close-up ↔ table): large diff (~60-80), different scene
 - Pipeline: find_red_clusters → merge_clusters → filter_cut_bounded_phases → filter by min duration (35s) → add ±2s buffer
-- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, OR (2) the gap is ≤100s and the minimum R/G ratio in the gap stays above GAP_RED_THRESH (1.3), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2)
+- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps.
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases
-- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `MAX_MERGE_GAP=100`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=3.5`, `EXIT_BUFFER=2`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
+- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=3.5`, `EXIT_BUFFER=2`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
 - Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
 
 ### Name Mask Detection (analyze_names.py)
@@ -163,20 +163,13 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 7 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current algorithm.
+All 9 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current algorithm.
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05
 - 29:41 -- 33:01
 - 33:31 -- 36:03
 - 58:08 -- 1:00:31
-
-### EC-1bimFjo4 (S21E05)
-- 7:28 -- 8:24 (interrupted game)
-- 15:49 -- 18:50
-- 28:11 -- 32:38
-- 33:15 -- 36:47
-- 46:24 -- 48:34
 
 ### -ESYZWvQMH4 (S21E02)
 - 8:24 -- 12:23
@@ -185,16 +178,23 @@ All 7 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current a
 - 2:09:12 -- 2:11:06
 - 2:25:16 -- 2:25:56
 
-### ZusP81Ycn-U
-- 7:34 -- 11:28
-- 1:22:48 -- 1:27:11
-- 1:27:46 -- 1:30:05
-- 1:44:50 -- (game ends during night, no day boundary)
+### EC-1bimFjo4 (S21E05)
+- 7:28 -- 8:24 (interrupted game)
+- 15:49 -- 18:50
+- 28:11 -- 32:38
+- 33:15 -- 36:47
+- 46:24 -- 48:34
 
 ### ieLaR4NBPz4
 - 11:12 -- 15:08
 - 34:30 -- 38:48
 - 39:18 -- 42:22
+
+### ZusP81Ycn-U
+- 7:34 -- 11:28
+- 1:22:48 -- 1:27:11
+- 1:27:46 -- 1:30:05
+- 1:44:50 -- (game ends during night, no day boundary)
 
 ### Xk65eicHSyw
 - 16:44 -- 21:08
@@ -202,8 +202,18 @@ All 7 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current a
 - 1:10:52 -- 1:13:36
 - 1:29:18 -- 1:31:22
 
+### WkVPdddUiio
+- 6:06 -- 9:52
+- 58:10 -- 61:14
+- 91:08 -- 93:00
+- 119:08 -- 120:50
+
 ### F2J0QK_3gUo
 - 10:24 -- 14:14
 - 28:09 -- 31:20
 - 31:47 -- 34:28
 - 59:30 -- 60:40
+
+### Jnf_dLaVNMU
+- 11:44 -- 15:14
+- 42:46 -- 47:00

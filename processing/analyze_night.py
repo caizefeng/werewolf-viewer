@@ -221,7 +221,9 @@ def _max_diff_in_window(diffs, center_idx, half_window=CUT_WINDOW // 2):
     return max(diffs[lo:hi]) if hi > lo else 0
 
 
-GAP_RED_THRESH = 1.3  # min R/G ratio in gap to consider it "still night" (close-up shots)
+GAP_RED_THRESH = 1.3  # R/G ratio threshold for "elevated" (close-up shots during night)
+GAP_ELEVATED_FRACTION = 0.6  # fraction of gap samples that must be elevated to merge
+GAP_MIN_FLOOR = 1.05  # minimum R/G in gap — below this means genuine daytime (blocks merge)
 MAX_MERGE_GAP = 100   # max gap duration (seconds) for ratio-based merging
 
 
@@ -240,9 +242,12 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
     inside the cluster).  If BOTH the exit and entry are camera cuts,
     the gap is close-ups during an ongoing night → merge.
 
-    Also merges when the gap R/G ratio stays elevated (min ≥ GAP_RED_THRESH),
+    Also merges when enough of the gap has elevated R/G ratios (≥ GAP_RED_THRESH),
     indicating the camera is on close-up shots during an ongoing night.
     Close-up R/G (~1.5-2.1) is clearly above daytime (~1.0-1.2).
+    Uses a fraction-based check (GAP_ELEVATED_FRACTION) to tolerate occasional
+    brief dips below threshold during close-ups, with a floor check (GAP_MIN_FLOOR)
+    to reject gaps that contain genuine daytime samples (R/G < 1.05).
     """
     if not clusters:
         return []
@@ -265,9 +270,12 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
         gap_duration = cs - prev_end
         if gap_duration <= MAX_MERGE_GAP and exit_idx < entry_idx:
             gap_ratios = ratios[exit_idx:entry_idx]
-            if len(gap_ratios) > 0 and gap_ratios.min() >= GAP_RED_THRESH:
-                merged[-1] = (merged[-1][0], ce)
-                continue
+            if len(gap_ratios) > 0:
+                elevated_frac = np.mean(gap_ratios >= GAP_RED_THRESH)
+                if (elevated_frac >= GAP_ELEVATED_FRACTION
+                        and gap_ratios.min() >= GAP_MIN_FLOOR):
+                    merged[-1] = (merged[-1][0], ce)
+                    continue
 
         # Real gap → keep separate
         merged.append((cs, ce))

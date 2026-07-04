@@ -8,6 +8,13 @@ import subprocess
 import sys
 
 
+def _yt_dlp_bin():
+    """Prefer the venv's yt-dlp (kept up to date via pip) over whatever is
+    on PATH — YouTube extraction breaks quickly on stale versions."""
+    candidate = os.path.join(os.path.dirname(sys.executable), "yt-dlp")
+    return candidate if os.path.exists(candidate) else "yt-dlp"
+
+
 def download_video(video_id, output_dir, quality="1080"):
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "video.mp4")
@@ -23,11 +30,12 @@ def download_video(video_id, output_dir, quality="1080"):
         return output_path
 
     url = f"https://www.youtube.com/watch?v={video_id}"
+    yt_dlp = _yt_dlp_bin()
 
     # Fetch video title
     try:
         result = subprocess.run(
-            ["yt-dlp", "--print", "title", "--no-download", url],
+            [yt_dlp, "--print", "title", "--no-download", url],
             capture_output=True, text=True, check=True,
         )
         title = result.stdout.strip()
@@ -46,7 +54,7 @@ def download_video(video_id, output_dir, quality="1080"):
         format_spec = "bestvideo[height<=720][fps<=60]+bestaudio"
 
     cmd = [
-        "yt-dlp",
+        yt_dlp,
         "-f", format_spec,
         "--merge-output-format", "mp4",
         "--concurrent-fragments", "8",

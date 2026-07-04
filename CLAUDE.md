@@ -71,6 +71,12 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 source processing/venv/bin/activate
 python3 processing/download.py --video-id="VIDEO_ID"
 
+# If downloads fail with "Requested format is not available" or SABR warnings,
+# yt-dlp is stale — YouTube breaks old versions quickly. Update it with:
+#   processing/venv/bin/pip install -U yt-dlp
+# download.py and /api/search prefer processing/venv/bin/yt-dlp over PATH,
+# so updating the venv copy is sufficient.
+
 # Analyze a video (generates metadata.json, parallel by default)
 python3 processing/analyze.py --video-id="VIDEO_ID"
 

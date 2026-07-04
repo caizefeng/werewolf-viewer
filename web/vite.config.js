@@ -6,6 +6,9 @@ import { spawn } from "child_process";
 const videosDir = path.resolve(__dirname, "../videos");
 const processingDir = path.resolve(__dirname, "../processing");
 const venvPython = path.join(processingDir, "venv", "bin", "python3");
+// Prefer the venv's yt-dlp (kept up to date via pip) over PATH
+const venvYtDlp = path.join(processingDir, "venv", "bin", "yt-dlp");
+const ytDlpBin = fs.existsSync(venvYtDlp) ? venvYtDlp : "yt-dlp";
 
 // Track active download/process jobs: { videoId, proc, phase, log }
 let activeJob = null;
@@ -119,7 +122,7 @@ export default defineConfig({
             }
 
             const args = [
-              "yt-dlp", "--flat-playlist", "--dump-json",
+              ytDlpBin, "--flat-playlist", "--dump-json",
               "--playlist-end", "200",
               "https://www.youtube.com/@JCDSS/videos",
             ];

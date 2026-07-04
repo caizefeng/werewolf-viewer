@@ -5,6 +5,10 @@ import argparse
 import json
 import os
 
+# Must be set before importing paddleocr: skips PaddleX's model-source
+# network check (faster init, works offline)
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
 import cv2
 import numpy as np
 from paddleocr import PaddleOCR
@@ -27,8 +31,9 @@ def sample_frames(video_path, start_sec=60, end_sec=300, interval=1):
     """Yield (sec, frame) tuples from video at given interval.
 
     Uses sequential grab/read from the start position instead of seeking
-    to each frame individually. Generator stops reading when the consumer
-    breaks out of the loop.
+    to each frame individually. A frame-index cursor keeps samples
+    frame-accurate for fractional frame rates. Generator stops reading
+    when the consumer breaks out of the loop.
     """
     cap = cv2.VideoCapture(video_path)
     try:
@@ -37,71 +42,74 @@ def sample_frames(video_path, start_sec=60, end_sec=300, interval=1):
         duration = total_frames / fps
         end_sec = min(end_sec, duration)
 
-        # Seek to first sample position
-        if start_sec > 0:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(start_sec * fps))
-
-        skip = int(interval * fps) - 1
+        # Seek to first sample position; pos = frame index of the next read
+        pos = int(round(start_sec * fps))
+        if pos > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
 
         for sec in range(int(start_sec), int(end_sec), interval):
+            target = int(round(sec * fps))
+            while pos < target and cap.grab():
+                pos += 1
             ret, frame = cap.read()
             if not ret:
                 break
+            pos += 1
             yield (sec, frame)
-            for _ in range(skip):
-                cap.grab()
     finally:
         cap.release()
 
 
 def detect_names_in_frame(ocr, frame, edge_ratio=0.2):
-    """Run OCR on left and right edges of frame, return role name bounding boxes."""
+    """Run OCR on left and right edges of frame, return role name bounding boxes.
+
+    Both edge crops go through a single predict() call to halve the
+    per-call overhead.
+    """
     h, w = frame.shape[:2]
     regions = []
 
-    for side in ["left", "right"]:
-        if side == "left":
-            crop = frame[:, :int(w * edge_ratio)]
-            x_offset = 0
-        else:
-            x_start = int(w * (1 - edge_ratio))
-            crop = frame[:, x_start:]
-            x_offset = x_start
+    x_right = int(w * (1 - edge_ratio))
+    crops = [
+        ("left", 0, frame[:, :int(w * edge_ratio)]),
+        ("right", x_right, frame[:, x_right:]),
+    ]
 
+    results = ocr.predict([c[2] for c in crops])
+    for (side, x_offset, crop), result in zip(crops, results):
         crop_w = crop.shape[1]
 
-        for result in ocr.predict(crop):
-            texts = result.get("rec_texts", [])
-            scores = result.get("rec_scores", [])
-            polys = result.get("dt_polys", [])
+        texts = result.get("rec_texts", [])
+        scores = result.get("rec_scores", [])
+        polys = result.get("dt_polys", [])
 
-            for text, score, poly in zip(texts, scores, polys):
-                if score < 0.5:
-                    continue
-                for role in ROLE_NAMES:
-                    if role in text:
-                        # Reject if the detected text is much longer than the
-                        # role name — likely a watermark or show title, not a
-                        # player role label (e.g. "京城大师赛狼人")
-                        if len(text) > len(role) + 2:
-                            break
-                        poly = np.array(poly)
-                        x1, y1 = poly.min(axis=0)
-                        x2, y2 = poly.max(axis=0)
-                        # PaddleOCR may resize narrow crops internally and
-                        # return inflated coordinates — skip detections that
-                        # exceed the actual crop boundaries
-                        if x2 > crop_w:
-                            break
-                        regions.append({
-                            "x": round((x_offset + x1) / w, 4),
-                            "y": round(y1 / h, 4),
-                            "w": round((x2 - x1) / w, 4),
-                            "h": round((y2 - y1) / h, 4),
-                            "text": text,
-                            "side": side,
-                        })
+        for text, score, poly in zip(texts, scores, polys):
+            if score < 0.5:
+                continue
+            for role in ROLE_NAMES:
+                if role in text:
+                    # Reject if the detected text is much longer than the
+                    # role name — likely a watermark or show title, not a
+                    # player role label (e.g. "京城大师赛狼人")
+                    if len(text) > len(role) + 2:
                         break
+                    poly = np.array(poly)
+                    x1, y1 = poly.min(axis=0)
+                    x2, y2 = poly.max(axis=0)
+                    # PaddleOCR may resize narrow crops internally and
+                    # return inflated coordinates — skip detections that
+                    # exceed the actual crop boundaries
+                    if x2 > crop_w:
+                        break
+                    regions.append({
+                        "x": round((x_offset + x1) / w, 4),
+                        "y": round(y1 / h, 4),
+                        "w": round((x2 - x1) / w, 4),
+                        "h": round((y2 - y1) / h, 4),
+                        "text": text,
+                        "side": side,
+                    })
+                    break
 
     return regions
 
@@ -125,14 +133,10 @@ def merge_regions(all_regions):
         x_min = min(r["x"] for r in side_regions)
         x_max = max(r["x"] + r["w"] for r in side_regions)
 
+        # Only cover the text area (do NOT extend to the frame edge)
         padding = 0.015
-        if side == "left":
-            # Only cover the text area (do NOT extend to frame edge)
-            ext_x_min = max(0, x_min - padding)
-            ext_x_max = min(1, x_max + padding)
-        else:
-            ext_x_min = max(0, x_min - padding)
-            ext_x_max = min(1, x_max + padding)
+        ext_x_min = max(0, x_min - padding)
+        ext_x_max = min(1, x_max + padding)
 
         # Full frame height — covers names at any vertical position
         merged.append({

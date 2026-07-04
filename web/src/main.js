@@ -99,6 +99,7 @@ async function switchVideo(videoId) {
   video.load();
 
   // Load new metadata and video
+  player.videoId = videoId;
   const loaded = await player.loadMetadata(`/${videoId}/metadata.json`);
   if (loaded) {
     player.loadVideo(`/${videoId}/video.mp4`);
@@ -418,6 +419,7 @@ async function deleteVideo(videoId) {
       // If currently playing this video, clear player
       if (currentVideoId === videoId) {
         currentVideoId = null;
+        player.videoId = null;
         const video = document.getElementById("video");
         video.pause();
         video.removeAttribute("src");

@@ -24,9 +24,10 @@ werewolf_viewer/
 │   ├── models/            # Local PaddleOCR model weights (gitignored, ~165MB)
 │   │   ├── PP-OCRv5_server_det/  # Text detection model
 │   │   └── PP-OCRv5_server_rec/  # Text recognition model (Chinese)
-│   ├── benchmark.py       # Performance benchmark: parallel vs sequential, ground truth validation
-│   ├── benchmark_full.py  # Comprehensive benchmark: night + name + full pipeline profiling
-│   ├── benchmark_ocr.py   # OCR model configuration benchmark (server vs mobile, aux vs no-aux)
+│   ├── benchmarks/        # Performance benchmarks (gitignored)
+│   │   ├── benchmark.py       # Parallel vs sequential + ground truth validation
+│   │   ├── benchmark_full.py  # Night + name + full pipeline profiling
+│   │   └── benchmark_ocr.py   # OCR model configuration benchmark (server vs mobile)
 │   └── download.py        # YouTube video downloader via yt-dlp
 ├── videos/                # Downloaded videos + metadata (not in git)
 │   └── <video-id>/
@@ -65,6 +66,8 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 ### Key Commands
 ```bash
 # Download a video (default quality: 1080p)
+# Downloads to video.download.mp4, renamed to video.mp4 only on success
+# (an interrupted merge can't leave a truncated video.mp4 blocking re-download)
 source processing/venv/bin/activate
 python3 processing/download.py --video-id="VIDEO_ID"
 
@@ -79,11 +82,11 @@ python3 processing/analyze_night.py videos/<id>/video.mp4
 python3 processing/analyze_night.py videos/<id>/video.mp4 --workers 1  # sequential
 
 # Benchmark parallel vs sequential on all ground truth videos
-cd processing && python3 benchmark.py
+cd processing/benchmarks && python3 benchmark.py
 
 # Comprehensive benchmark: night + name detection + full pipeline profiling
-cd processing && python3 benchmark_full.py                    # all GT videos
-cd processing && python3 benchmark_full.py VIDEO_ID1 VIDEO_ID2  # specific videos
+cd processing/benchmarks && python3 benchmark_full.py                    # all GT videos
+cd processing/benchmarks && python3 benchmark_full.py VIDEO_ID1 VIDEO_ID2  # specific videos
 
 # Start server in background (persists after terminal close)
 scripts/start.sh          # serves on http://localhost:5173/
@@ -100,7 +103,9 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 ## Algorithm Notes
 
 ### Night Phase Detection (analyze_night.py)
-- Samples frames every 2 seconds using grab+read
+- Samples frames every 2 seconds using grab+read, tracking a frame-index
+  cursor (`pos`) so each sample lands on `round(sec * fps)` — frame-accurate
+  for fractional frame rates (a fixed skip count would drift ~56s/hour at 29.97 fps)
 - **Threaded scanning**: splits video into segments, scans in parallel with `ThreadPoolExecutor`
   - Default: 3 threads (optimal; diminishing returns beyond 3 due to I/O contention)
   - Each thread opens its own `VideoCapture` and seeks to its segment start
@@ -121,6 +126,8 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR (PP-OCRv5 server det+rec) to find Chinese role names (狼人, 预言家, 女巫, etc.)
+- Left + right edge crops are OCR'd in a **single batched `predict()` call** per frame
+- Sets `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` at import (offline-safe, faster init)
 - **Local models**: weights stored in `processing/models/` (self-contained, no global cache dependency)
 - **No aux models**: doc orientation, unwarping, textline orientation disabled (designed for scanned docs, hurt video frame detection)
 - **Device fallback**: uses CUDA GPU if available, falls back to CPU (PaddlePaddle has no Apple MPS support)
@@ -135,9 +142,11 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   - Night detection runs in main process with threaded scanning
   - Name detection runs as subprocess (separate GIL, no contention)
   - Results communicated via temp JSON file; fallback to sequential on failure
+  - Subprocess output captured to a temp log file, tail printed on failure for diagnosis
+  - If night detection raises, the subprocess is killed (no orphans) and temp files removed
 - Revert to sequential: `--sequential`
 - **Benchmarked speedup**: ~1.57x overall (91s → 58s on 62min video)
-- All 6 ground truth videos validated: parallel produces **identical** results to sequential
+- All 9 ground truth videos validated: parallel produces **identical** results to sequential
 
 ## Web Player Features
 - Custom video controls at z-index 20 (above overlays)
@@ -146,20 +155,34 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Masks are resizable via drag handles on edges, deletable via × button on hover
 - "+ Mask" button to manually add mask regions when auto-detection fails
 - Night phase markers on progress bar (red segments, draggable handles)
+- **Edit persistence**: all edits (phase drags, add/remove phases, add/remove/resize
+  masks, resets) POST to `/api/metadata` and are written into the video's
+  metadata.json; auto-detected values are preserved in `original_night_phases` /
+  `original_name_masks` on first save, and the Reset buttons restore those
 - Fullscreen via Fullscreen API on wrapper element
 - Sidebar with two tabs: video list + download management
 - Download management: search YouTube, download+process, stop, delete
+  - Stop during download deletes the partial dir; stop during analysis keeps the video
+- Time display shows h:mm:ss above one hour
 - Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s
 
 ## API Endpoints (vite.config.js middleware)
 - `GET /api/videos` - list videos with metadata.json
 - `GET /api/downloaded` - list all video dirs with hasVideo/hasMetadata flags
-- `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query})
+- `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}); channel list cached 5 min
 - `POST /api/download` - start download+process job (body: {videoId})
 - `GET /api/job-status` - poll active job status
-- `POST /api/stop` - stop active job
+- `POST /api/stop` - stop active job (deletes dir only if still downloading)
 - `POST /api/delete` - delete video dir (body: {videoId})
+- `POST /api/metadata` - persist edited night_phases/name_masks to metadata.json (body: {videoId, night_phases, name_masks}); preserves originals in original_* fields
 - `GET /<videoId>/*` - serve files from ../videos/
+
+### Security (server is LAN-exposed: host 0.0.0.0, allowedHosts true)
+- `videoId` validated against `/^[A-Za-z0-9_-]{6,20}$/` everywhere (blocks path traversal into rm/spawn/paths)
+- Static file serving is confined to `videos/` via a resolved-path prefix check
+- POST endpoints reject cross-origin requests (Origin header vs Host)
+- Malformed URLs (bad percent-encoding) return 400 instead of crashing the middleware
+- All `spawn()` calls have `error` handlers (missing binaries can't crash the server)
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).

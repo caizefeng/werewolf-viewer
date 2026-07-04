@@ -10,9 +10,30 @@ const venvPython = path.join(processingDir, "venv", "bin", "python3");
 // Track active download/process jobs: { videoId, proc, phase, log }
 let activeJob = null;
 
+// Cached channel upload list for /api/search (the yt-dlp fetch takes seconds)
+let channelCache = { fetchedAt: 0, videos: null };
+const CHANNEL_CACHE_TTL = 5 * 60 * 1000;
+
+// YouTube video IDs are 11 chars of [A-Za-z0-9_-]; allow a small range for
+// safety. Rejects path traversal (slashes, dots) in videoId outright.
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
+
 function jsonResponse(res, status, data) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(data));
+}
+
+// Browsers attach an Origin header to cross-site POSTs (including
+// preflight-free text/plain ones), so a malicious page on the LAN could
+// otherwise trigger downloads/deletes. Same-origin requests and curl pass.
+function blockCrossOrigin(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try {
+    if (new URL(origin).host === req.headers.host) return false;
+  } catch {}
+  jsonResponse(res, 403, { error: "Cross-origin request rejected" });
+  return true;
 }
 
 function readBody(req) {
@@ -36,7 +57,14 @@ export default defineConfig({
       name: "serve-videos",
       configureServer(server) {
         server.middlewares.use(async (req, res, next) => {
-          const url = decodeURIComponent(req.url.split("?")[0]);
+          let url;
+          try {
+            url = decodeURIComponent(req.url.split("?")[0]);
+          } catch {
+            // Malformed percent-encoding; don't let the throw escape the
+            // async middleware (it would kill the dev server)
+            return jsonResponse(res, 400, { error: "Malformed URL" });
+          }
 
           // API: list available videos (dirs with metadata.json)
           if (url === "/api/videos") {
@@ -70,8 +98,25 @@ export default defineConfig({
           // YouTube's channel search tab caps results at ~12, so we fetch
           // the 200 most recent uploads and filter client-side instead.
           if (url === "/api/search" && req.method === "POST") {
+            if (blockCrossOrigin(req, res)) return;
             const { query } = await readBody(req);
             if (!query) return jsonResponse(res, 400, { error: "Missing query" });
+
+            // Split query into keywords; video must contain ALL keywords
+            const filterAndRespond = (videos) => {
+              const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
+              const results = videos.filter((r) => {
+                const t = r.title.toLowerCase();
+                return keywords.every((kw) => t.includes(kw));
+              });
+              // Sort by title for chronological upload order (S21E01, S21E02, ...)
+              results.sort((a, b) => a.title.localeCompare(b.title, "zh"));
+              jsonResponse(res, 200, results);
+            };
+
+            if (channelCache.videos && Date.now() - channelCache.fetchedAt < CHANNEL_CACHE_TTL) {
+              return filterAndRespond(channelCache.videos);
+            }
 
             const args = [
               "yt-dlp", "--flat-playlist", "--dump-json",
@@ -82,10 +127,14 @@ export default defineConfig({
             let output = "";
             proc.stdout.on("data", (d) => (output += d));
             proc.stderr.on("data", () => {});
+            proc.on("error", (err) => {
+              if (!res.headersSent) {
+                jsonResponse(res, 500, { error: `yt-dlp failed to start: ${err.message}` });
+              }
+            });
             proc.on("close", () => {
-              // Split query into keywords; video must contain ALL keywords
-              const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
-              const results = output
+              if (res.headersSent) return;
+              const videos = output
                 .trim()
                 .split("\n")
                 .filter(Boolean)
@@ -95,22 +144,20 @@ export default defineConfig({
                     return { id: j.id, title: j.title, duration: j.duration };
                   } catch { return null; }
                 })
-                .filter((r) => {
-                  if (!r) return false;
-                  const t = r.title.toLowerCase();
-                  return keywords.every((kw) => t.includes(kw));
-                });
-              // Sort by title for chronological upload order (S21E01, S21E02, ...)
-              results.sort((a, b) => a.title.localeCompare(b.title, "zh"));
-              jsonResponse(res, 200, results);
+                .filter(Boolean);
+              if (videos.length > 0) {
+                channelCache = { fetchedAt: Date.now(), videos };
+              }
+              filterAndRespond(videos);
             });
             return;
           }
 
           // API: start download + process
           if (url === "/api/download" && req.method === "POST") {
+            if (blockCrossOrigin(req, res)) return;
             const { videoId } = await readBody(req);
-            if (!videoId) return jsonResponse(res, 400, { error: "Missing videoId" });
+            if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
             if (activeJob && !activeJob.done) return jsonResponse(res, 409, { error: "A job is already running", jobVideoId: activeJob.videoId });
 
             const outputDir = path.join(videosDir, videoId);
@@ -131,6 +178,13 @@ export default defineConfig({
 
             dlProc.stdout.on("data", (d) => activeJob.log.push(d.toString()));
             dlProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
+
+            dlProc.on("error", (err) => {
+              if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
+              activeJob.error = `Failed to start download: ${err.message}`;
+              activeJob.done = true;
+              activeJob.proc = null;
+            });
 
             dlProc.on("close", (code) => {
               if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
@@ -166,6 +220,14 @@ export default defineConfig({
 
               anProc.stdout.on("data", (d) => activeJob.log.push(d.toString()));
               anProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
+
+              anProc.on("error", (err) => {
+                if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
+                activeJob.error = `Failed to start analysis: ${err.message}`;
+                activeJob.phase = "done";
+                activeJob.done = true;
+                activeJob.proc = null;
+              });
 
               anProc.on("close", (code2) => {
                 if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
@@ -204,15 +266,20 @@ export default defineConfig({
 
           // API: stop active job
           if (url === "/api/stop" && req.method === "POST") {
+            if (blockCrossOrigin(req, res)) return;
             if (!activeJob || activeJob.done) return jsonResponse(res, 200, { stopped: false });
             if (activeJob.proc) {
               // Kill entire process group (python + yt-dlp/analyze subprocesses)
               try { process.kill(-activeJob.proc.pid, "SIGTERM"); } catch {}
             }
-            // Clean up partial download directory
-            const jobDir = path.join(videosDir, activeJob.videoId);
-            if (fs.existsSync(jobDir)) {
-              fs.rmSync(jobDir, { recursive: true, force: true });
+            // Clean up the partial download directory — but only while
+            // downloading. A stop during analysis keeps the (expensive)
+            // finished download; re-running analysis is cheap.
+            if (activeJob.phase === "downloading") {
+              const jobDir = path.join(videosDir, activeJob.videoId);
+              if (fs.existsSync(jobDir)) {
+                fs.rmSync(jobDir, { recursive: true, force: true });
+              }
             }
             activeJob.error = "Stopped by user";
             activeJob.stopped = true;
@@ -223,12 +290,44 @@ export default defineConfig({
 
           // API: delete a video
           if (url === "/api/delete" && req.method === "POST") {
+            if (blockCrossOrigin(req, res)) return;
             const { videoId } = await readBody(req);
-            if (!videoId) return jsonResponse(res, 400, { error: "Missing videoId" });
+            if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
             const dir = path.join(videosDir, videoId);
             if (!fs.existsSync(dir)) return jsonResponse(res, 404, { error: "Not found" });
             fs.rmSync(dir, { recursive: true, force: true });
             return jsonResponse(res, 200, { deleted: true });
+          }
+
+          // API: persist edited night phases / name masks to metadata.json.
+          // The auto-detected values are preserved in original_* fields on
+          // first save so the player's Reset buttons can restore them.
+          if (url === "/api/metadata" && req.method === "POST") {
+            if (blockCrossOrigin(req, res)) return;
+            const { videoId, night_phases, name_masks } = await readBody(req);
+            if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
+            const phasesOk = Array.isArray(night_phases) && night_phases.every(
+              (p) => p && Number.isFinite(p.start) && Number.isFinite(p.end));
+            const masksOk = Array.isArray(name_masks) && name_masks.every(
+              (m) => m && Number.isFinite(m.x) && Number.isFinite(m.y)
+                && Number.isFinite(m.w) && Number.isFinite(m.h));
+            if (!phasesOk || !masksOk) return jsonResponse(res, 400, { error: "Malformed night_phases/name_masks" });
+
+            const metaPath = path.join(videosDir, videoId, "metadata.json");
+            if (!fs.existsSync(metaPath)) return jsonResponse(res, 404, { error: "Not found" });
+            try {
+              const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+              meta.original_night_phases ??= meta.night_phases;
+              meta.original_name_masks ??= meta.name_masks;
+              meta.night_phases = night_phases.map((p) => ({ start: p.start, end: p.end }));
+              meta.name_masks = name_masks.map((m) => ({ x: m.x, y: m.y, w: m.w, h: m.h }));
+              const tmpPath = metaPath + ".tmp";
+              fs.writeFileSync(tmpPath, JSON.stringify(meta, null, 2));
+              fs.renameSync(tmpPath, metaPath);
+              return jsonResponse(res, 200, { saved: true });
+            } catch (err) {
+              return jsonResponse(res, 500, { error: err.message });
+            }
           }
 
           // API: check which video IDs are downloaded
@@ -251,8 +350,13 @@ export default defineConfig({
             return;
           }
 
-          // Serve files from ../videos/
+          // Serve files from ../videos/. path.join normalizes ".." segments,
+          // so anything escaping videosDir fails the prefix check.
           const filePath = path.join(videosDir, url);
+          if (!filePath.startsWith(videosDir + path.sep)) {
+            next();
+            return;
+          }
 
           if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
             const ext = path.extname(filePath).toLowerCase();
@@ -270,8 +374,15 @@ export default defineConfig({
 
               if (range) {
                 const parts = range.replace(/bytes=/, "").split("-");
-                const start = parseInt(parts[0], 10);
-                const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+                let start = parseInt(parts[0], 10);
+                let end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+                if (Number.isNaN(start)) start = 0;
+                if (Number.isNaN(end) || end >= stat.size) end = stat.size - 1;
+                if (start > end || start >= stat.size) {
+                  res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+                  res.end();
+                  return;
+                }
                 const chunkSize = end - start + 1;
 
                 res.writeHead(206, {

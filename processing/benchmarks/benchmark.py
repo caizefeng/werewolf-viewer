@@ -29,6 +29,15 @@ GROUND_TRUTH = {
     "Xk65eicHSyw": [
         (1004, 1268), (2530, 2760), (4252, 4416), (5358, 5482),
     ],
+    "WkVPdddUiio": [
+        (366, 592), (3490, 3674), (5468, 5580), (7148, 7250),
+    ],
+    "F2J0QK_3gUo": [
+        (624, 854), (1689, 1880), (1907, 2068), (3570, 3640),
+    ],
+    "Jnf_dLaVNMU": [
+        (704, 914), (2566, 2820),
+    ],
 }
 
 TOLERANCE = 5  # seconds (ground truth approximate, buffer settings may differ)
@@ -137,7 +146,7 @@ def main():
     total_seq = sum(r["seq_time"] for r in results)
     total_par = sum(r["par_time"] for r in results)
     all_match = all(r["results_match"] for r in results)
-    all_gt = all(r.get("gt_par_ok", True) for r in results)
+    all_gt = all(r.get("gt_par_ok") is not False for r in results)
     print("-" * 60)
     print(f"{'TOTAL':<20} {total_seq:>6.1f}s {total_par:>6.1f}s "
           f"{total_seq/total_par if total_par else 0:>7.2f}x {str(all_match):>6} "

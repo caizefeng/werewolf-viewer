@@ -28,6 +28,7 @@ export class WerewolfPlayer {
     this.nightJumpButtons = elements.nightJumpButtons;
 
     this.metadata = null;
+    this.videoId = null;
     this._defaultNameMasks = null;
     this._defaultNightPhases = null;
     this.masksEnabled = true;
@@ -101,18 +102,28 @@ export class WerewolfPlayer {
   // ── Metadata & Video ──
 
   async loadMetadata(url) {
+    this.metadata = null;
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       this.metadata = await res.json();
-      // Deep-copy originals for reset
-      this._defaultNameMasks = JSON.parse(JSON.stringify(this.metadata.name_masks));
-      this._defaultNightPhases = JSON.parse(JSON.stringify(this.metadata.night_phases));
+      // Reset restores the auto-detected values (preserved server-side in
+      // original_* once the user saves edits); fall back to loaded values
+      this._defaultNameMasks = JSON.parse(JSON.stringify(
+        this.metadata.original_name_masks ?? this.metadata.name_masks));
+      this._defaultNightPhases = JSON.parse(JSON.stringify(
+        this.metadata.original_night_phases ?? this.metadata.night_phases));
       this.statusEl.textContent = `Loaded: ${this.metadata.night_phases.length} night phases, ${this.metadata.name_masks.length} mask regions`;
       this.createNameMasks();
       this._renderNightMarkers();
       return true;
     } catch (err) {
+      // Clear stale UI from the previously loaded video
+      this.createNameMasks();
+      this._renderNightMarkers();
+      this._renderNightJumpButtons();
+      this.isNight = false;
+      this._updateNightState();
       this.statusEl.textContent = `Failed to load metadata: ${err.message}`;
       console.error("Failed to load metadata:", err);
       return false;
@@ -121,6 +132,26 @@ export class WerewolfPlayer {
 
   loadVideo(url) {
     this.video.src = url;
+  }
+
+  // Persist current night phases + masks back to the server's metadata.json
+  async saveMetadata() {
+    if (!this.videoId || !this.metadata) return;
+    try {
+      const res = await fetch("/api/metadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoId: this.videoId,
+          night_phases: this.metadata.night_phases,
+          name_masks: this.metadata.name_masks,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      this.statusEl.textContent += " · saved";
+    } catch (err) {
+      this.statusEl.textContent = `Failed to save edits: ${err.message}`;
+    }
   }
 
   // ── Name masks ──
@@ -173,6 +204,7 @@ export class WerewolfPlayer {
           this.createNameMasks();
           this._updateMaskVisibility(this.video.currentTime);
           this.statusEl.textContent = `Removed mask region`;
+          this.saveMetadata();
         }
       });
       el.appendChild(delBtn);
@@ -194,8 +226,12 @@ export class WerewolfPlayer {
       startW = elRect.width;
       startLeft = elRect.left - wrapperLeft;
       const maxW = wrapperW * 0.5;
+      let lastW = startW;
+      let lastLeft = startLeft;
+      let moved = false;
 
       const onMove = (ev) => {
+        moved = true;
         const dx = ev.clientX - startX;
         let newW, newLeft;
 
@@ -211,11 +247,20 @@ export class WerewolfPlayer {
 
         el.style.width = `${(newW / wrapperW) * 100}%`;
         el.style.left = `${(newLeft / wrapperW) * 100}%`;
+        lastW = newW;
+        lastLeft = newLeft;
       };
 
       const onUp = () => {
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
+        if (!moved) return;
+        // Write final geometry back to the mask object so re-renders
+        // (add/delete mask) keep it, and persist
+        mask.x = Math.round((lastLeft / wrapperW) * 10000) / 10000;
+        mask.w = Math.round((lastW / wrapperW) * 10000) / 10000;
+        this.statusEl.textContent = "Resized mask region";
+        this.saveMetadata();
       };
 
       document.addEventListener("mousemove", onMove);
@@ -251,8 +296,11 @@ export class WerewolfPlayer {
 
   _fmt(s) {
     if (!isFinite(s)) return "0:00";
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
+    s = Math.floor(s);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h) return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
     return `${m}:${sec.toString().padStart(2, "0")}`;
   }
 
@@ -295,7 +343,10 @@ export class WerewolfPlayer {
   }
 
   _onFullscreenChange() {
-    this.fullscreenBtn.textContent = document.fullscreenElement ? "⛶" : "⛶";
+    this.fullscreenBtn.title = document.fullscreenElement ? "Exit fullscreen" : "Fullscreen";
+    if (!document.fullscreenElement) {
+      this.wrapper.classList.remove("hide-cursor");
+    }
   }
 
   // ── Controls show/hide ──
@@ -410,6 +461,7 @@ export class WerewolfPlayer {
           this._renderNightMarkers();
           this._onTimeUpdate(); // re-evaluate current state
           this.statusEl.textContent = `Removed night phase ${i + 1}`;
+          this.saveMetadata();
         });
 
         marker.appendChild(startHandle);
@@ -492,6 +544,7 @@ export class WerewolfPlayer {
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
         this.statusEl.textContent = `Night phase ${index + 1}: ${this._fmt(phase.start)} – ${this._fmt(phase.end)}`;
+        this.saveMetadata();
       };
 
       document.addEventListener("mousemove", onMove);
@@ -508,6 +561,7 @@ export class WerewolfPlayer {
     this._renderNightMarkers();
     this._onTimeUpdate();
     this.statusEl.textContent = `Added night phase: ${this._fmt(start)} – ${this._fmt(end)}`;
+    this.saveMetadata();
   }
 
   _addNameMask() {
@@ -519,23 +573,27 @@ export class WerewolfPlayer {
     this.createNameMasks();
     this._updateMaskVisibility(this.video.currentTime);
     this.statusEl.textContent = "Added mask at center. Drag edges to position it.";
+    this.saveMetadata();
   }
 
   // ── Reset defaults ──
 
   _resetMasks() {
-    if (!this._defaultNameMasks) return;
+    if (!this._defaultNameMasks || !this.metadata) return;
     this.metadata.name_masks = JSON.parse(JSON.stringify(this._defaultNameMasks));
     this.createNameMasks();
+    this._updateMaskVisibility(this.video.currentTime);
     this.statusEl.textContent = "Masks reset to default";
+    this.saveMetadata();
   }
 
   _resetNightPhases() {
-    if (!this._defaultNightPhases) return;
+    if (!this._defaultNightPhases || !this.metadata) return;
     this.metadata.night_phases = JSON.parse(JSON.stringify(this._defaultNightPhases));
     this._renderNightMarkers();
     this._onTimeUpdate();
     this.statusEl.textContent = "Night phases reset to default";
+    this.saveMetadata();
   }
 
   // ── Mask toggle ──
@@ -580,11 +638,15 @@ export class WerewolfPlayer {
         break;
       case "ArrowLeft":
         e.preventDefault();
-        this.video.currentTime = Math.max(0, this.video.currentTime - 5);
+        if (isFinite(this.video.duration)) {
+          this.video.currentTime = Math.max(0, this.video.currentTime - 5);
+        }
         break;
       case "ArrowRight":
         e.preventDefault();
-        this.video.currentTime = Math.min(this.video.duration, this.video.currentTime + 5);
+        if (isFinite(this.video.duration)) {
+          this.video.currentTime = Math.min(this.video.duration, this.video.currentTime + 5);
+        }
         break;
     }
   }

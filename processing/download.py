@@ -2,6 +2,7 @@
 """Download a YouTube video using yt-dlp."""
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -10,6 +11,10 @@ import sys
 def download_video(video_id, output_dir, quality="1080"):
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "video.mp4")
+    # yt-dlp/ffmpeg write to this name; renamed to video.mp4 only on success
+    # so an interrupted merge never leaves a truncated video.mp4 that would
+    # block re-download
+    partial_path = os.path.join(output_dir, "video.download.mp4")
     info_path = os.path.join(output_dir, "info.json")
 
     if os.path.exists(output_path):
@@ -30,7 +35,6 @@ def download_video(video_id, output_dir, quality="1080"):
         title = video_id
 
     # Save info
-    import json
     with open(info_path, "w", encoding="utf-8") as f:
         json.dump({"title": title, "video_id": video_id}, f, ensure_ascii=False, indent=2)
     print(f"Title: {title}")
@@ -46,12 +50,13 @@ def download_video(video_id, output_dir, quality="1080"):
         "-f", format_spec,
         "--merge-output-format", "mp4",
         "--concurrent-fragments", "8",
-        "-o", output_path,
+        "-o", partial_path,
         url,
     ]
 
     print(f"Downloading {url} at {quality}p...")
     subprocess.run(cmd, check=True)
+    os.replace(partial_path, output_path)
     print(f"Downloaded to {output_path}")
     return output_path
 

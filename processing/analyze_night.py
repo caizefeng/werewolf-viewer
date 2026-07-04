@@ -17,7 +17,6 @@ Algorithm:
 
 import argparse
 import json
-import os
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
@@ -48,37 +47,47 @@ def _scan_segment(args):
 
     For correct boundary diffs, workers with need_prev=True read one extra
     frame before their segment to use as prev_frame for the first diff.
+
+    A frame-index cursor (pos) keeps every sample at round(sec * fps), so
+    sampling stays frame-accurate for fractional frame rates (e.g. 29.97):
+    a fixed skip count would drift ~56s/hour at 29.97 fps.
     """
     video_path, start_sec, end_sec, scan_interval, need_prev = args
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    skip = int(scan_interval * fps) - 1
 
     prev_frame = None
 
+    # pos = frame index that the next read() will return
     if need_prev and start_sec >= scan_interval:
         # Seek to one interval before segment start, read as prev_frame
-        prev_sec = start_sec - scan_interval
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(prev_sec * fps))
+        pos = int(round((start_sec - scan_interval) * fps))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
         ret, prev_frame = cap.read()
+        pos += 1
         if not ret:
             prev_frame = None
-        # Advance to segment start
-        for _ in range(skip):
-            cap.grab()
     elif start_sec > 0:
         # Seek to segment start (no prev frame needed)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(start_sec * fps))
+        pos = int(round(start_sec * fps))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+    else:
+        pos = 0
 
     timestamps = []
     ratios = []
     diffs = []
 
     for sec in range(start_sec, end_sec, scan_interval):
+        # Advance to the exact frame for this timestamp
+        target = int(round(sec * fps))
+        while pos < target and cap.grab():
+            pos += 1
         ret, frame = cap.read()
         if not ret:
             break
+        pos += 1
         h, w = frame.shape[:2]
         bl = frame[int(h * 0.88):int(h * 0.93), int(w * 0.02):int(w * 0.12)]
         br = frame[int(h * 0.88):int(h * 0.93), int(w * 0.88):int(w * 0.98)]
@@ -92,10 +101,6 @@ def _scan_segment(args):
         else:
             diffs.append(0.0)
         prev_frame = frame
-
-        # Skip frames until next sample
-        for _ in range(skip):
-            cap.grab()
 
     cap.release()
     return timestamps, ratios, diffs
@@ -159,12 +164,16 @@ def _scan_sequential(video_path, fps, duration):
     ratios = []
     diffs = []
     prev_frame = None
-    skip = int(SCAN_INTERVAL * fps) - 1
+    pos = 0  # frame index of the next read; frame-accurate for fractional fps
 
     for sec in range(0, duration, SCAN_INTERVAL):
+        target = int(round(sec * fps))
+        while pos < target and cap.grab():
+            pos += 1
         ret, frame = cap.read()
         if not ret:
             break
+        pos += 1
         h, w = frame.shape[:2]
         bl = frame[int(h * 0.88):int(h * 0.93), int(w * 0.02):int(w * 0.12)]
         br = frame[int(h * 0.88):int(h * 0.93), int(w * 0.88):int(w * 0.98)]
@@ -178,9 +187,6 @@ def _scan_sequential(video_path, fps, duration):
         else:
             diffs.append(0.0)
         prev_frame = frame
-
-        for _ in range(skip):
-            cap.grab()
 
     cap.release()
     print(f"  Sampled {len(timestamps)} frames ({duration}s video, {SCAN_INTERVAL}s interval)")

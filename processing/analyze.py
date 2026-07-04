@@ -11,6 +11,17 @@ import tempfile
 from analyze_night import analyze_night_phases
 
 
+def _print_log_tail(log_path, lines=15):
+    """Print the last lines of a subprocess log for error context."""
+    try:
+        with open(log_path, "r", errors="replace") as f:
+            tail = [l.rstrip() for l in f if l.strip()][-lines:]
+    except OSError:
+        return
+    for l in tail:
+        print(f"    {l}")
+
+
 def run_analysis(video_path, sequential=False, num_workers=0):
     """Run full analysis pipeline and write metadata.json.
 
@@ -47,35 +58,54 @@ def run_analysis(video_path, sequential=False, num_workers=0):
         name_tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, dir=video_dir)
         name_tmp.close()
+        name_log_path = name_tmp.name + ".log"
 
-        env = os.environ.copy()
-        env["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-        name_proc = subprocess.Popen(
-            [venv_python, "-c",
-             f"import json; from analyze_names import analyze_name_regions; "
-             f"r = analyze_name_regions({video_path!r}); "
-             f"open({name_tmp.name!r}, 'w').write(json.dumps(r, default=str))"],
-            cwd=processing_dir, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        name_masks = None
+        try:
+            # Subprocess output goes to a log file (avoids interleaving with
+            # night detection output; printed on failure for diagnosis)
+            with open(name_log_path, "w") as log_f:
+                name_proc = subprocess.Popen(
+                    [venv_python, "-c",
+                     f"import json; from analyze_names import analyze_name_regions; "
+                     f"r = analyze_name_regions({video_path!r}); "
+                     f"open({name_tmp.name!r}, 'w').write(json.dumps(r, default=str))"],
+                    cwd=processing_dir,
+                    stdout=log_f, stderr=subprocess.STDOUT,
+                )
 
-        # Run night detection in main process
-        print("--- Night Phase Detection ---")
-        night_phases = analyze_night_phases(video_path, num_workers=num_workers)
-        print()
+            # Run night detection in main process
+            print("--- Night Phase Detection ---")
+            try:
+                night_phases = analyze_night_phases(video_path, num_workers=num_workers)
+            except BaseException:
+                name_proc.kill()  # don't leave the OCR subprocess orphaned
+                raise
+            finally:
+                name_proc.wait()
+            print()
 
-        # Wait for name detection subprocess
-        print("--- Character Name Detection ---")
-        name_proc.wait()
-        if name_proc.returncode != 0:
-            print(f"Name detection subprocess failed (exit {name_proc.returncode}), retrying...")
-            from analyze_names import analyze_name_regions
-            name_masks = analyze_name_regions(video_path)
-        else:
-            with open(name_tmp.name, "r") as f:
-                name_masks = json.load(f)
-            print(f"  Name detection completed ({len(name_masks)} mask regions)")
-        os.unlink(name_tmp.name)
+            print("--- Character Name Detection ---")
+            if name_proc.returncode == 0:
+                try:
+                    with open(name_tmp.name, "r") as f:
+                        name_masks = json.load(f)
+                    print(f"  Name detection completed ({len(name_masks)} mask regions)")
+                except (OSError, ValueError):
+                    print("  Name detection output unreadable, retrying...")
+            else:
+                print(f"Name detection subprocess failed (exit {name_proc.returncode}):")
+                _print_log_tail(name_log_path)
+                print("Retrying in-process...")
+            if name_masks is None:
+                from analyze_names import analyze_name_regions
+                name_masks = analyze_name_regions(video_path)
+        finally:
+            for p in (name_tmp.name, name_log_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
         print()
 
     # Write metadata

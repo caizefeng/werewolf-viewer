@@ -26,6 +26,15 @@ function jsonResponse(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+// Extract the most useful error lines from a job log: prefer explicit
+// ERROR lines (yt-dlp and Python print those) over the tail, which for a
+// Python failure is just the traceback's last frames.
+function errorTail(log) {
+  const lines = log.join("").split("\n").filter((l) => l.trim());
+  const errors = lines.filter((l) => /\bERROR\b/i.test(l));
+  return (errors.length ? errors : lines).slice(-3).join("\n").trim();
+}
+
 // Browsers attach an Origin header to cross-site POSTs (including
 // preflight-free text/plain ones), so a malicious page on the LAN could
 // otherwise trigger downloads/deletes. Same-origin requests and curl pass.
@@ -192,15 +201,7 @@ export default defineConfig({
             dlProc.on("close", (code) => {
               if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
               if (code !== 0) {
-                // Extract last meaningful lines from log for error context
-                const logTail = activeJob.log
-                  .join("")
-                  .split("\n")
-                  .filter((l) => l.trim())
-                  .slice(-3)
-                  .join("\n")
-                  .trim();
-                activeJob.error = logTail || `Download failed (exit ${code})`;
+                activeJob.error = errorTail(activeJob.log) || `Download failed (exit ${code})`;
                 activeJob.done = true;
                 activeJob.proc = null;
                 return;
@@ -235,14 +236,7 @@ export default defineConfig({
               anProc.on("close", (code2) => {
                 if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
                 if (code2 !== 0) {
-                  const logTail = activeJob.log
-                    .join("")
-                    .split("\n")
-                    .filter((l) => l.trim())
-                    .slice(-3)
-                    .join("\n")
-                    .trim();
-                  activeJob.error = logTail || `Analysis failed (exit ${code2})`;
+                  activeJob.error = errorTail(activeJob.log) || `Analysis failed (exit ${code2})`;
                 }
                 activeJob.phase = "done";
                 activeJob.done = true;

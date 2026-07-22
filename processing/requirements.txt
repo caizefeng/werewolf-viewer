@@ -1,4 +1,6 @@
-yt-dlp
+# [default] pulls yt-dlp-ejs, the JS challenge solver YouTube requires
+# (needs a JS runtime on PATH too: brew install deno)
+yt-dlp[default]
 paddleocr
 paddlepaddle
 opencv-python

@@ -73,9 +73,14 @@ python3 processing/download.py --video-id="VIDEO_ID"
 
 # If downloads fail with "Requested format is not available" or SABR warnings,
 # yt-dlp is stale — YouTube breaks old versions quickly. Update it with:
-#   processing/venv/bin/pip install -U yt-dlp
+#   processing/venv/bin/pip install -U "yt-dlp[default]"
 # download.py and /api/search prefer processing/venv/bin/yt-dlp over PATH,
 # so updating the venv copy is sufficient.
+#
+# If downloads fail with "n challenge solving failed" / "Some formats may be
+# missing": YouTube requires solving JS challenges (since 2026-07). yt-dlp
+# needs a JS runtime (brew install deno) plus the solver package yt-dlp-ejs
+# (included in the yt-dlp[default] pip extra).
 
 # Analyze a video (generates metadata.json, parallel by default)
 python3 processing/analyze.py --video-id="VIDEO_ID"

@@ -81,6 +81,14 @@ python3 processing/download.py --video-id="VIDEO_ID"
 # missing": YouTube requires solving JS challenges (since 2026-07). yt-dlp
 # needs a JS runtime (brew install deno) plus the solver package yt-dlp-ejs
 # (included in the yt-dlp[default] pip extra).
+#
+# If downloads die mid-stream with "HTTP Error 403: Forbidden" (~0.5% in):
+# YouTube's PO-token enforcement invalidated that client's stream URLs.
+# download.py uses player_client=web_embedded first (no PO token needed as
+# of 2026-07), then falls back to default clients. If web_embedded breaks
+# too, check clients with:
+#   yt-dlp --extractor-args "youtube:player_client=CLIENT" -f "bestvideo..." --print format_id URL
+# or install a PO token provider (bgutil-ytdlp-pot-provider).
 
 # Analyze a video (generates metadata.json, parallel by default)
 python3 processing/analyze.py --video-id="VIDEO_ID"

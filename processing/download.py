@@ -53,7 +53,7 @@ def download_video(video_id, output_dir, quality="1080"):
     else:
         format_spec = "bestvideo[height<=720][fps<=60]+bestaudio"
 
-    cmd = [
+    base_cmd = [
         yt_dlp,
         "-f", format_spec,
         "--merge-output-format", "mp4",
@@ -62,8 +62,25 @@ def download_video(video_id, output_dir, quality="1080"):
         url,
     ]
 
+    # YouTube's PO-token enforcement (2026-07) 403s the default clients'
+    # stream URLs shortly after download start. The web_embedded client
+    # still serves plain https formats without a PO token, so try it first;
+    # fall back to yt-dlp's default clients (e.g. if a video has embedding
+    # disabled, or when YouTube eventually breaks web_embedded too).
+    attempts = [
+        ["--extractor-args", "youtube:player_client=web_embedded"],
+        [],
+    ]
+
     print(f"Downloading {url} at {quality}p...")
-    subprocess.run(cmd, check=True)
+    for i, extra_args in enumerate(attempts):
+        try:
+            subprocess.run([base_cmd[0]] + extra_args + base_cmd[1:], check=True)
+            break
+        except subprocess.CalledProcessError:
+            if i == len(attempts) - 1:
+                raise
+            print("Download attempt failed, retrying with default clients...")
     os.replace(partial_path, output_path)
     print(f"Downloaded to {output_path}")
     return output_path

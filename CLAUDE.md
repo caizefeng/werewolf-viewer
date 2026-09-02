@@ -82,13 +82,20 @@ python3 processing/download.py --video-id="VIDEO_ID"
 # needs a JS runtime (brew install deno) plus the solver package yt-dlp-ejs
 # (included in the yt-dlp[default] pip extra).
 #
-# If downloads die mid-stream with "HTTP Error 403: Forbidden" (~0.5% in):
+# If downloads die mid-stream with "HTTP Error 403: Forbidden" (a few % in):
 # YouTube's PO-token enforcement invalidated that client's stream URLs.
-# download.py uses player_client=web_embedded first (no PO token needed as
-# of 2026-07), then falls back to default clients. If web_embedded breaks
-# too, check clients with:
+# FIRST update yt-dlp (its maintainers rotate default clients to ungated
+# ones; 2026-08-19 moved to visionos and fixed this). download.py tries the
+# default clients first (2 attempts, since the 403s are intermittent), then
+# falls back to player_client=web_embedded. If both break, sweep clients:
 #   yt-dlp --extractor-args "youtube:player_client=CLIENT" -f "bestvideo..." --print format_id URL
 # or install a PO token provider (bgutil-ytdlp-pot-provider).
+#
+# GOTCHA: if `processing/venv/bin/pip list | grep yt-dlp` shows version
+# "None", the venv has duplicate yt_dlp-*.dist-info dirs and `pip install -U`
+# silently does nothing (this pinned us to a stale version in 2026-08).
+# Fix: pip uninstall -y yt-dlp; rm -rf venv/lib/python3.11/site-packages/yt_dlp*;
+# pip install -U "yt-dlp[default]"
 
 # Analyze a video (generates metadata.json, parallel by default)
 python3 processing/analyze.py --video-id="VIDEO_ID"

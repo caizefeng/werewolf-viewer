@@ -30,7 +30,9 @@ function jsonResponse(res, status, data) {
 // ERROR lines (yt-dlp and Python print those) over the tail, which for a
 // Python failure is just the traceback's last frames.
 function errorTail(log) {
-  const lines = log.join("").split("\n").filter((l) => l.trim());
+  // Split on \r too: yt-dlp progress updates are \r-separated, and the
+  // ERROR line lands on the same "line" as hundreds of progress ticks
+  const lines = log.join("").split(/\r?\n|\r/).filter((l) => l.trim());
   const errors = lines.filter((l) => /\bERROR\b/i.test(l));
   return (errors.length ? errors : lines).slice(-3).join("\n").trim();
 }

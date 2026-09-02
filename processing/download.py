@@ -62,25 +62,35 @@ def download_video(video_id, output_dir, quality="1080"):
         url,
     ]
 
-    # YouTube's PO-token enforcement (2026-07) 403s the default clients'
-    # stream URLs shortly after download start. The web_embedded client
-    # still serves plain https formats without a PO token, so try it first;
-    # fall back to yt-dlp's default clients (e.g. if a video has embedding
-    # disabled, or when YouTube eventually breaks web_embedded too).
-    attempts = [
-        ["--extractor-args", "youtube:player_client=web_embedded"],
-        [],
+    # YouTube keeps changing which player clients serve downloadable
+    # https formats without a PO token, and yt-dlp rotates its default
+    # clients accordingly (2026-08: visionos). Use the defaults first, and
+    # fall back to web_embedded, which has worked when the defaults were
+    # gated (2026-07). Stream URLs also get invalidated intermittently
+    # (HTTP 403 a few % in) under YouTube's PO-token experiments, so each
+    # strategy gets two tries with a fresh extraction.
+    strategies = [
+        ("default clients", []),
+        ("web_embedded client", ["--extractor-args", "youtube:player_client=web_embedded"]),
     ]
+    tries_per_strategy = 2
 
     print(f"Downloading {url} at {quality}p...")
-    for i, extra_args in enumerate(attempts):
-        try:
-            subprocess.run([base_cmd[0]] + extra_args + base_cmd[1:], check=True)
+    last_err = None
+    for label, extra_args in strategies:
+        for attempt in range(1, tries_per_strategy + 1):
+            print(f"[download.py] {label}, attempt {attempt}/{tries_per_strategy}")
+            try:
+                subprocess.run([base_cmd[0]] + extra_args + base_cmd[1:], check=True)
+                last_err = None
+                break
+            except subprocess.CalledProcessError as e:
+                last_err = e
+                print(f"[download.py] {label} attempt {attempt} failed (exit {e.returncode})")
+        if last_err is None:
             break
-        except subprocess.CalledProcessError:
-            if i == len(attempts) - 1:
-                raise
-            print("Download attempt failed, retrying with default clients...")
+    if last_err is not None:
+        raise last_err
     os.replace(partial_path, output_path)
     print(f"Downloaded to {output_path}")
     return output_path

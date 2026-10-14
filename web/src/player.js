@@ -3,6 +3,10 @@
  * interactive night-phase markers, and resizable name masks.
  */
 
+// Per-browser preference: "full" extends masks to the frame edges (hides
+// player names/avatars too); "role" covers only the role-name boxes
+const MASK_MODE_KEY = "werewolf.maskMode";
+
 export class WerewolfPlayer {
   constructor(elements) {
     this.video = elements.video;
@@ -10,6 +14,7 @@ export class WerewolfPlayer {
     this.nightOverlay = elements.nightOverlay;
     this.nameMasksContainer = elements.nameMasks;
     this.toggleBtn = elements.toggleMasks;
+    this.maskModeBtn = elements.maskModeBtn;
     this.phaseIndicator = elements.phaseIndicator;
     this.statusEl = elements.status;
     this.playBtn = elements.playBtn;
@@ -33,6 +38,7 @@ export class WerewolfPlayer {
     this._defaultNameMasks = null;
     this._defaultNightPhases = null;
     this.masksEnabled = true;
+    this.maskMode = this._loadMaskMode();
     this.isNight = false;
     this.savedVolume = 1;
     this.userMuted = false; // mute requested by the user (vs. night auto-mute)
@@ -40,6 +46,7 @@ export class WerewolfPlayer {
     this.isSeeking = false;
 
     this._bindEvents();
+    this._updateMaskModeBtn();
   }
 
   // ── Events ──
@@ -83,6 +90,7 @@ export class WerewolfPlayer {
 
     // Mask toggle
     this.toggleBtn.addEventListener("click", () => this.toggleMasks());
+    this.maskModeBtn.addEventListener("click", () => this.toggleMaskMode());
 
     // Fullscreen
     this.fullscreenBtn.addEventListener("click", () => this._toggleFullscreen());
@@ -168,17 +176,19 @@ export class WerewolfPlayer {
     if (!this.metadata?.name_masks) return;
 
     for (const mask of this.metadata.name_masks) {
+      const box = this._renderedBox(mask);
       const el = document.createElement("div");
       el.className = "name-mask";
-      el.style.left = `${mask.x * 100}%`;
+      el.style.left = `${box.left * 100}%`;
       el.style.top = `${mask.y * 100}%`;
-      el.style.width = `${mask.w * 100}%`;
+      el.style.width = `${box.width * 100}%`;
       el.style.height = `${mask.h * 100}%`;
       if (!this.masksEnabled) el.classList.add("hidden");
 
       // Inner edge (closer to center): right handle for left masks, left handle for right masks
-      const innerSide = mask.x < 0.5 ? "right" : "left";
-      const outerSide = mask.x < 0.5 ? "left" : "right";
+      const side = this._maskSide(mask);
+      const innerSide = side === "left" ? "right" : "left";
+      const outerSide = side;
 
       // Inner hover zone + handle
       const innerZone = document.createElement("div");
@@ -189,14 +199,17 @@ export class WerewolfPlayer {
       el.appendChild(innerZone);
       this._bindMaskResize(el, innerHandle, mask, `handle-${innerSide}`);
 
-      // Outer hover zone + handle
-      const outerZone = document.createElement("div");
-      outerZone.className = `mask-hover-zone zone-${outerSide}`;
-      const outerHandle = document.createElement("div");
-      outerHandle.className = `resize-handle handle-${outerSide}`;
-      outerZone.appendChild(outerHandle);
-      el.appendChild(outerZone);
-      this._bindMaskResize(el, outerHandle, mask, `handle-${outerSide}`);
+      // Outer hover zone + handle (role mode only: in full mode the outer
+      // edge is pinned to the frame edge)
+      if (this.maskMode !== "full") {
+        const outerZone = document.createElement("div");
+        outerZone.className = `mask-hover-zone zone-${outerSide}`;
+        const outerHandle = document.createElement("div");
+        outerHandle.className = `resize-handle handle-${outerSide}`;
+        outerZone.appendChild(outerHandle);
+        el.appendChild(outerZone);
+        this._bindMaskResize(el, outerHandle, mask, `handle-${outerSide}`);
+      }
 
       // Delete button (visible on hover)
       const delBtn = document.createElement("button");
@@ -217,6 +230,66 @@ export class WerewolfPlayer {
       el.appendChild(delBtn);
 
       this.nameMasksContainer.appendChild(el);
+    }
+  }
+
+  // ── Mask mode (full = extend to frame edges, role = role-name box only) ──
+
+  _loadMaskMode() {
+    try {
+      const v = localStorage.getItem(MASK_MODE_KEY);
+      if (v === "role" || v === "full") return v;
+    } catch {}
+    return "full";
+  }
+
+  toggleMaskMode() {
+    this.maskMode = this.maskMode === "full" ? "role" : "full";
+    try { localStorage.setItem(MASK_MODE_KEY, this.maskMode); } catch {}
+    this._updateMaskModeBtn();
+    this.createNameMasks();
+    this._updateMaskVisibility(this.video.currentTime);
+    this.statusEl.textContent = this.maskMode === "full"
+      ? "Masks extended to frame edges (role + player names hidden)"
+      : "Masks cover role names only";
+  }
+
+  _updateMaskModeBtn() {
+    const full = this.maskMode === "full";
+    this.maskModeBtn.textContent = full ? "Mask: Full" : "Mask: Roles";
+    this.maskModeBtn.title = full
+      ? "Masks extend to the frame edges, hiding player names and avatars too. Click to hide role names only."
+      : "Masks hide role names only. Click to also hide player names and avatars.";
+  }
+
+  _maskSide(mask) {
+    return mask.x < 0.5 ? "left" : "right";
+  }
+
+  // Masks are stored as the role-name box. In full mode the rendered box
+  // is extended outward to the frame edge on its side.
+  _renderedBox(mask) {
+    const r4 = (v) => Math.round(v * 10000) / 10000;
+    if (this.maskMode !== "full") return { left: mask.x, width: mask.w };
+    if (this._maskSide(mask) === "left") return { left: 0, width: r4(mask.x + mask.w) };
+    return { left: mask.x, width: r4(1 - mask.x) };
+  }
+
+  // Inverse of _renderedBox: write a rendered box back to the stored
+  // role box. In full mode only the inner edge can have moved.
+  _storeRenderedBox(mask, left, width) {
+    const r4 = (v) => Math.round(v * 10000) / 10000;
+    if (this.maskMode !== "full") {
+      mask.x = r4(left);
+      mask.w = r4(width);
+    } else if (this._maskSide(mask) === "left") {
+      const inner = left + width;
+      mask.x = r4(Math.min(mask.x, inner));
+      mask.w = r4(inner - mask.x);
+    } else {
+      const outer = Math.max(mask.x + mask.w, left);
+      mask.x = r4(left);
+      mask.w = r4(outer - left);
     }
   }
 
@@ -264,8 +337,7 @@ export class WerewolfPlayer {
         if (!moved) return;
         // Write final geometry back to the mask object so re-renders
         // (add/delete mask) keep it, and persist
-        mask.x = Math.round((lastLeft / wrapperW) * 10000) / 10000;
-        mask.w = Math.round((lastW / wrapperW) * 10000) / 10000;
+        this._storeRenderedBox(mask, lastLeft / wrapperW, lastW / wrapperW);
         this.statusEl.textContent = "Resized mask region";
         this.saveMetadata();
       };
@@ -573,13 +645,25 @@ export class WerewolfPlayer {
 
   _addNameMask() {
     if (!this.metadata) return;
-    // Place new mask at center of video so it's immediately visible and easy to drag
-    const newMask = { x: 0.42, y: 0, w: 0.16, h: 1.0 };
+    let newMask, msg;
+    if (this.maskMode === "full") {
+      // Full mode pins masks to a frame edge: add on whichever side has none
+      const sides = new Set(this.metadata.name_masks.map((m) => this._maskSide(m)));
+      const side = !sides.has("left") ? "left" : (!sides.has("right") ? "right" : "left");
+      newMask = side === "left"
+        ? { x: 0, y: 0, w: 0.14, h: 1.0 }
+        : { x: 0.86, y: 0, w: 0.14, h: 1.0 };
+      msg = `Added ${side} mask. Drag its inner edge to size it.`;
+    } else {
+      // Place new mask at center of video so it's immediately visible and easy to drag
+      newMask = { x: 0.42, y: 0, w: 0.16, h: 1.0 };
+      msg = "Added mask at center. Drag edges to position it.";
+    }
 
     this.metadata.name_masks.push(newMask);
     this.createNameMasks();
     this._updateMaskVisibility(this.video.currentTime);
-    this.statusEl.textContent = "Added mask at center. Drag edges to position it.";
+    this.statusEl.textContent = msg;
     this.saveMetadata();
   }
 

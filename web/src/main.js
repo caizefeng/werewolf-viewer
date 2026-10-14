@@ -10,6 +10,7 @@ function getElements() {
     nightOverlay: document.getElementById("night-overlay"),
     nameMasks: document.getElementById("name-masks"),
     toggleMasks: document.getElementById("toggle-masks"),
+    maskModeBtn: document.getElementById("mask-mode-btn"),
     phaseIndicator: document.getElementById("phase-indicator"),
     status: document.getElementById("status"),
     playBtn: document.getElementById("play-btn"),

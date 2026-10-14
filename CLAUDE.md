@@ -179,6 +179,12 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Night overlay: black screen during night phases
 - Name masks: opaque overlay, visible only after first night ends, hidden during nights
 - Masks are resizable via drag handles on edges, deletable via × button on hover
+- **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
+  metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
+  outward to its frame edge (`_renderedBox`), hiding player avatars/names too; only the inner
+  edge handle is shown and resizes write back through the inverse transform (`_storeRenderedBox`),
+  so switching back to Roles mode keeps the detected box. "+ Mask" in Full mode adds an
+  edge-anchored mask on whichever side has none; in Roles mode it adds a center mask
 - "+ Mask" button to manually add mask regions when auto-detection fails
 - Night phase markers on progress bar (red segments, draggable handles)
 - **Edit persistence**: all edits (phase drags, add/remove phases, add/remove/resize

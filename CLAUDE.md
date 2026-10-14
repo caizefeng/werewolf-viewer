@@ -190,12 +190,20 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Download management: search YouTube, download+process, stop, delete
   - Stop during download deletes the partial dir; stop during analysis keeps the video
 - Time display shows h:mm:ss above one hour
+- Mute button (🔊/🔇) beside the volume slider. `userMuted` tracks a deliberate mute
+  separately from the night auto-mute: dawn only unmutes if the user didn't mute, and
+  unmuting during a night phase (masks on) takes effect at dawn rather than immediately
 - Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s
 
 ## API Endpoints (vite.config.js middleware)
 - `GET /api/videos` - list videos with metadata.json
 - `GET /api/downloaded` - list all video dirs with hasVideo/hasMetadata flags
-- `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}); channel list cached 5 min
+- `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}). Merges two
+  sources, deduped by id, both filtered by all query keywords: (1) the 200 most recent
+  uploads (cached 5 min) — covers broad queries, which YouTube's search tab caps at ~20;
+  (2) the channel search tab `@JCDSS/search?query=…` — finds older episodes that have
+  aged out of the recent window (the channel posts ~3 games/day, so 200 uploads ≈ 2 months;
+  this is why S22E39/S22E41 returned "no results" in 2026-10 before source 2 was added)
 - `POST /api/download` - start download+process job (body: {videoId})
 - `GET /api/job-status` - poll active job status
 - `POST /api/stop` - stop active job (deletes dir only if still downloading)

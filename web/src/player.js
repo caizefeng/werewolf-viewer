@@ -15,6 +15,7 @@ export class WerewolfPlayer {
     this.playBtn = elements.playBtn;
     this.timeDisplay = elements.timeDisplay;
     this.volumeSlider = elements.volumeSlider;
+    this.muteBtn = elements.muteBtn;
     this.fullscreenBtn = elements.fullscreenBtn;
     this.progressContainer = elements.progressContainer;
     this.progressBar = elements.progressBar;
@@ -34,6 +35,7 @@ export class WerewolfPlayer {
     this.masksEnabled = true;
     this.isNight = false;
     this.savedVolume = 1;
+    this.userMuted = false; // mute requested by the user (vs. night auto-mute)
     this.hideTimer = null;
     this.isSeeking = false;
 
@@ -55,6 +57,7 @@ export class WerewolfPlayer {
     this.video.addEventListener("progress", () => this._updateBuffered());
     this.video.addEventListener("volumechange", () => {
       this.volumeSlider.value = this.video.muted ? 0 : this.video.volume;
+      this._updateMuteBtn();
     });
 
     // Play/pause
@@ -66,8 +69,12 @@ export class WerewolfPlayer {
       const v = parseFloat(this.volumeSlider.value);
       this.video.volume = v;
       this.video.muted = v === 0;
+      this.userMuted = v === 0;
       this.savedVolume = v || this.savedVolume;
     });
+
+    // Mute toggle
+    this.muteBtn.addEventListener("click", () => this.toggleMute());
 
     // Progress bar seek
     this.progressContainer.addEventListener("mousedown", (e) => this._startSeek(e));
@@ -400,7 +407,7 @@ export class WerewolfPlayer {
       this.phaseIndicator.textContent = "🌙 Night";
     } else {
       this.nightOverlay.classList.add("hidden");
-      if (this.video.muted && this.masksEnabled) {
+      if (this.video.muted && this.masksEnabled && !this.userMuted) {
         this.video.muted = false;
         this.video.volume = this.savedVolume;
       }
@@ -610,11 +617,32 @@ export class WerewolfPlayer {
       this.video.muted = true;
     } else {
       this.nightOverlay.classList.add("hidden");
-      this.video.muted = false;
+      this.video.muted = this.userMuted;
     }
 
     // Re-evaluate mask visibility based on current time
     this._updateMaskVisibility(this.video.currentTime);
+  }
+
+  // ── Mute ──
+
+  toggleMute() {
+    this.userMuted = !this.userMuted;
+    if (this.userMuted) {
+      this.video.muted = true;
+    } else if (!(this.isNight && this.masksEnabled)) {
+      // During a night phase (masks on) audio stays off until dawn;
+      // the user's unmute then takes effect in _updateNightState
+      this.video.muted = false;
+      if (this.video.volume === 0) this.video.volume = this.savedVolume || 1;
+    }
+    this._updateMuteBtn();
+  }
+
+  _updateMuteBtn() {
+    this.muteBtn.textContent = this.video.muted ? "🔇" : "🔊";
+    this.muteBtn.classList.toggle("active", this.userMuted);
+    this.muteBtn.title = this.userMuted ? "Unmute" : "Mute";
   }
 
   // ── Keyboard ──

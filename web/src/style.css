@@ -1071,6 +1071,12 @@ header h1::after {
   font-weight: 500;
 }
 
+#mute-btn {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
 #volume-slider {
   width: 70px;
   accent-color: var(--accent);

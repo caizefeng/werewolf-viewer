@@ -17,6 +17,37 @@ let activeJob = null;
 let channelCache = { fetchedAt: 0, videos: null };
 const CHANNEL_CACHE_TTL = 5 * 60 * 1000;
 
+const CHANNEL_URL = "https://www.youtube.com/@JCDSS";
+const RECENT_LIMIT = 200;    // recent-uploads window (~2 months at 3 games/day)
+const SEARCH_TAB_LIMIT = 50; // YouTube caps the channel search tab at ~20 anyway
+
+// Run yt-dlp --flat-playlist on a channel tab URL and resolve the entries.
+// Rejects only if yt-dlp fails to start.
+function ytDlpFlatList(listUrl, limit) {
+  return new Promise((resolve, reject) => {
+    const args = ["--flat-playlist", "--dump-json", "--playlist-end", String(limit), listUrl];
+    const proc = spawn(ytDlpBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    proc.stdout.on("data", (d) => (output += d));
+    proc.stderr.on("data", () => {});
+    proc.on("error", reject);
+    proc.on("close", () => {
+      const videos = output
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            const j = JSON.parse(line);
+            return { id: j.id, title: j.title, duration: j.duration };
+          } catch { return null; }
+        })
+        .filter((v) => v && v.id && v.title);
+      resolve(videos);
+    });
+  });
+}
+
 // YouTube video IDs are 11 chars of [A-Za-z0-9_-]; allow a small range for
 // safety. Rejects path traversal (slashes, dots) in videoId outright.
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
@@ -108,63 +139,45 @@ export default defineConfig({
           }
 
           // API: search YouTube (restricted to @JCDSS channel)
-          // Fetches recent channel videos and filters by query keywords.
-          // YouTube's channel search tab caps results at ~12, so we fetch
-          // the 200 most recent uploads and filter client-side instead.
+          // Two sources, merged: (1) the channel's recent uploads (cached),
+          // which covers broad queries that YouTube's search tab would cap
+          // at ~20 results; (2) the channel search tab, which finds older
+          // episodes that have aged out of the recent window (the channel
+          // posts ~3 games/day, so 200 uploads is only ~2 months).
           if (url === "/api/search" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
             const { query } = await readBody(req);
             if (!query) return jsonResponse(res, 400, { error: "Missing query" });
 
             // Split query into keywords; video must contain ALL keywords
-            const filterAndRespond = (videos) => {
-              const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
-              const results = videos.filter((r) => {
-                const t = r.title.toLowerCase();
-                return keywords.every((kw) => t.includes(kw));
-              });
-              // Sort by title for chronological upload order (S21E01, S21E02, ...)
-              results.sort((a, b) => a.title.localeCompare(b.title, "zh"));
-              jsonResponse(res, 200, results);
-            };
+            const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
+            const matches = (v) => keywords.every((kw) => v.title.toLowerCase().includes(kw));
+            const settle = (p) => p.then((videos) => ({ videos }), (err) => ({ error: err.message }));
 
-            if (channelCache.videos && Date.now() - channelCache.fetchedAt < CHANNEL_CACHE_TTL) {
-              return filterAndRespond(channelCache.videos);
+            const cacheFresh = channelCache.videos && Date.now() - channelCache.fetchedAt < CHANNEL_CACHE_TTL;
+            const [recentRes, searchRes] = await Promise.all([
+              cacheFresh
+                ? Promise.resolve({ videos: channelCache.videos })
+                : settle(ytDlpFlatList(`${CHANNEL_URL}/videos`, RECENT_LIMIT)),
+              settle(ytDlpFlatList(`${CHANNEL_URL}/search?query=${encodeURIComponent(query)}`, SEARCH_TAB_LIMIT)),
+            ]);
+            if (recentRes.error && searchRes.error) {
+              return jsonResponse(res, 500, { error: `yt-dlp failed to start: ${recentRes.error}` });
+            }
+            if (!cacheFresh && recentRes.videos && recentRes.videos.length > 0) {
+              channelCache = { fetchedAt: Date.now(), videos: recentRes.videos };
             }
 
-            const args = [
-              ytDlpBin, "--flat-playlist", "--dump-json",
-              "--playlist-end", "200",
-              "https://www.youtube.com/@JCDSS/videos",
-            ];
-            const proc = spawn(args[0], args.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
-            let output = "";
-            proc.stdout.on("data", (d) => (output += d));
-            proc.stderr.on("data", () => {});
-            proc.on("error", (err) => {
-              if (!res.headersSent) {
-                jsonResponse(res, 500, { error: `yt-dlp failed to start: ${err.message}` });
-              }
-            });
-            proc.on("close", () => {
-              if (res.headersSent) return;
-              const videos = output
-                .trim()
-                .split("\n")
-                .filter(Boolean)
-                .map((line) => {
-                  try {
-                    const j = JSON.parse(line);
-                    return { id: j.id, title: j.title, duration: j.duration };
-                  } catch { return null; }
-                })
-                .filter(Boolean);
-              if (videos.length > 0) {
-                channelCache = { fetchedAt: Date.now(), videos };
-              }
-              filterAndRespond(videos);
-            });
-            return;
+            const seen = new Set();
+            const results = [];
+            for (const v of [...(recentRes.videos || []), ...(searchRes.videos || [])]) {
+              if (seen.has(v.id) || !matches(v)) continue;
+              seen.add(v.id);
+              results.push(v);
+            }
+            // Sort by title for chronological upload order (S21E01, S21E02, ...)
+            results.sort((a, b) => a.title.localeCompare(b.title, "zh"));
+            return jsonResponse(res, 200, results);
           }
 
           // API: start download + process

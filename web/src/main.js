@@ -15,6 +15,7 @@ function getElements() {
     playBtn: document.getElementById("play-btn"),
     timeDisplay: document.getElementById("time-display"),
     volumeSlider: document.getElementById("volume-slider"),
+    muteBtn: document.getElementById("mute-btn"),
     fullscreenBtn: document.getElementById("fullscreen-btn"),
     progressContainer: document.getElementById("progress-container"),
     progressBar: document.getElementById("progress-bar"),

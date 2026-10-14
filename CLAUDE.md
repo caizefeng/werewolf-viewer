@@ -169,10 +169,20 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   players' public notes ("没平民", "跳狼人") and the watermark contain role words too. Substring
   matching let notes widen masks into the notes column (S22 right masks came out 0.785 instead of
   ~0.862; some left masks 0.19 instead of 0.14). Notes are public claims, not spoilers
-- Merges detected regions per side using **10th/90th percentile** x-edges (+0.015 padding), full
-  frame height, so one stray box can't widen the mask
-- Masks only cover role name text, NOT player avatars/numbers (the player's Full mask mode extends
-  them to the frame edge at render time)
+- Outer edge from **10th/90th percentile** role-box x-edges (a stray box can't widen it)
+- **Masks cover the role column PLUS the note column**: inner edge extends NOTE_EXTEND (0.12 of
+  frame width) past the role toward center, clamped (left <=0.32, right >=0.68) so it never reaches
+  the stage. The director types a running opinion next to each role that gives it away as much as
+  the name. Fixed extension, not measured (measuring tripped over centered banners: title, config
+  line, news ticker)
+- **Role map** (build_role_map): from raw OCR items it builds role_map = {left:[...], right:[...]},
+  each player {number, name, role, y0, y1}. Rows cluster role boxes by y (_cluster_rows); reveal
+  bands are midpoints between rows (_bands_from_centers); number/name are the outward (edge-side)
+  items per row (number = 1-2 digits 1-12; name prefers Chinese then role-proximity, dropping corner
+  overlays like RTX). The role string is only a menu label (the viewer reveals real pixels)
+- Raw OCR goes through ocr_items_in_frame (edge_ratio 0.30) -> _roles_from_items;
+  detect_names_in_frame is a thin wrapper. analyze_name_regions_full() returns {name_masks,
+  role_map} (what analyze.py writes); analyze_name_regions() still returns masks only
 
 ### Pipeline Parallelism (analyze.py)
 - Default: runs night + name detection in **separate processes** (subprocess for name detection)
@@ -190,6 +200,13 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Night overlay: black screen during night phases
 - Name masks: opaque overlay, visible only after first night ends, hidden during nights
 - Masks are resizable via drag handles on edges, deletable via × button on hover
+- **Role reveal panel** (right-edge slide-out, hover the ROLES tab): default all-blind, lists every
+  player (number, name, role hidden as dots). Clicking a player reveals their role on the video (the
+  mask opens a horizontal band over that row; _fillSegments renders the opaque fill in segments with
+  gaps at revealed rows). Clicking a WOLF reveals/hides the whole wolf team (any role containing the
+  wolf character), mimicking playing as a wolf who knows the pack. Blind/All buttons reveal none/all.
+  The revealed set persists per video in localStorage. Needs a role map (re-analyze older videos)
+- **Mute button** beside the volume slider; volume/mute persist per browser
 - **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
   metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
   outward to its frame edge (`_renderedBox`), hiding player avatars/names too; only the inner
@@ -232,6 +249,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - `POST /api/stop` - stop active job (deletes dir only if still downloading)
 - `POST /api/delete` - delete video dir (body: {videoId})
 - `POST /api/metadata` - persist edited night_phases/name_masks to metadata.json (body: {videoId, night_phases, name_masks}); preserves originals in original_* fields
+- metadata.json also carries `role_map` (per-player role/number/name/y-band) from analysis, read by the role-reveal panel
 - `GET /<videoId>/*` - serve files from ../videos/
 
 ### Security (server is LAN-exposed: host 0.0.0.0, allowedHosts true)
@@ -243,7 +261,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 9 videos below achieve 100% detection accuracy (0 FP, 0 miss) with current algorithm.
+All 9 videos below achieve 100% detection accuracy (0 FP, 0 miss), re-validated after the 0.25s boundary refinement (benchmark.py: all GT OK, parallel == sequential, ~1.3x speedup).
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05

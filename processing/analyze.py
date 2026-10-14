@@ -49,8 +49,8 @@ def run_analysis(video_path, sequential=False, num_workers=0):
         print()
 
         print("--- Character Name Detection ---")
-        from analyze_names import analyze_name_regions
-        name_masks = analyze_name_regions(video_path)
+        from analyze_names import analyze_name_regions_full
+        name_result = analyze_name_regions_full(video_path)
         print()
     else:
         # Parallel: run name detection as a subprocess (separate GIL + process)
@@ -60,15 +60,15 @@ def run_analysis(video_path, sequential=False, num_workers=0):
         name_tmp.close()
         name_log_path = name_tmp.name + ".log"
 
-        name_masks = None
+        name_result = None
         try:
             # Subprocess output goes to a log file (avoids interleaving with
             # night detection output; printed on failure for diagnosis)
             with open(name_log_path, "w") as log_f:
                 name_proc = subprocess.Popen(
                     [venv_python, "-c",
-                     f"import json; from analyze_names import analyze_name_regions; "
-                     f"r = analyze_name_regions({video_path!r}); "
+                     f"import json; from analyze_names import analyze_name_regions_full; "
+                     f"r = analyze_name_regions_full({video_path!r}); "
                      f"open({name_tmp.name!r}, 'w').write(json.dumps(r, default=str))"],
                     cwd=processing_dir,
                     stdout=log_f, stderr=subprocess.STDOUT,
@@ -89,17 +89,19 @@ def run_analysis(video_path, sequential=False, num_workers=0):
             if name_proc.returncode == 0:
                 try:
                     with open(name_tmp.name, "r") as f:
-                        name_masks = json.load(f)
-                    print(f"  Name detection completed ({len(name_masks)} mask regions)")
+                        name_result = json.load(f)
+                    print(f"  Name detection completed "
+                          f"({len(name_result['name_masks'])} mask regions, "
+                          f"{sum(len(v) for v in name_result.get('role_map', {}).values())} players mapped)")
                 except (OSError, ValueError):
                     print("  Name detection output unreadable, retrying...")
             else:
                 print(f"Name detection subprocess failed (exit {name_proc.returncode}):")
                 _print_log_tail(name_log_path)
                 print("Retrying in-process...")
-            if name_masks is None:
-                from analyze_names import analyze_name_regions
-                name_masks = analyze_name_regions(video_path)
+            if name_result is None:
+                from analyze_names import analyze_name_regions_full
+                name_result = analyze_name_regions_full(video_path)
         finally:
             for p in (name_tmp.name, name_log_path):
                 try:
@@ -112,7 +114,8 @@ def run_analysis(video_path, sequential=False, num_workers=0):
     metadata = {
         "video_file": video_file,
         "night_phases": night_phases,
-        "name_masks": name_masks,
+        "name_masks": name_result["name_masks"],
+        "role_map": name_result.get("role_map", {}),
     }
 
     metadata_path = os.path.join(video_dir, "metadata.json")
@@ -122,7 +125,7 @@ def run_analysis(video_path, sequential=False, num_workers=0):
     print("=" * 60)
     print(f"Analysis complete!")
     print(f"  Night phases found: {len(night_phases)}")
-    print(f"  Name mask regions: {len(name_masks)}")
+    print(f"  Name mask regions: {len(name_result['name_masks'])}")
     print(f"  Metadata saved to: {metadata_path}")
     print("=" * 60)
 

@@ -617,6 +617,19 @@ header h1::after {
 
 .name-mask {
   position: absolute;
+  border-left: 1px solid rgba(224, 72, 72, 0.06);
+  border-right: 1px solid rgba(224, 72, 72, 0.06);
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Opaque fill — one full-height segment by default; split into segments
+   with gaps where a player's role is revealed (role-reveal panel) */
+.name-mask-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
   background:
     linear-gradient(180deg,
       #08070f 0%,
@@ -625,18 +638,14 @@ header h1::after {
       #0d0c16 92%,
       #08070f 100%
     );
-  border-left: 1px solid rgba(224, 72, 72, 0.06);
-  border-right: 1px solid rgba(224, 72, 72, 0.06);
   box-shadow:
     inset 2px 0 12px rgba(224, 72, 72, 0.03),
     inset -2px 0 12px rgba(224, 72, 72, 0.03);
-  transition: opacity 0.3s ease;
   pointer-events: none;
-  overflow: hidden;
 }
 
 /* Inner vignette — darkened edges with faint crimson bleed */
-.name-mask::before {
+.name-mask-fill::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1125,4 +1134,182 @@ header h1::after {
   font-size: 0.75rem;
   color: var(--text-muted);
   font-weight: 500;
+}
+
+
+/* ── Role reveal panel (right edge slide-out, mirrors night-jump on the left) ── */
+#role-panel {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 210px;
+  max-height: 82%;
+  overflow-y: auto;
+  padding: 10px;
+  background: rgba(12, 11, 20, 0.92);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--border-subtle);
+  border-right: none;
+  border-radius: var(--radius) 0 0 var(--radius);
+  transform: translateY(-50%) translateX(100%);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#role-panel.hidden {
+  display: none;
+}
+
+/* Hover trigger zone extending into the video area */
+#role-panel::before {
+  content: "";
+  position: absolute;
+  top: -10%;
+  left: -28px;
+  width: 28px;
+  height: 120%;
+}
+
+/* Vertical tab labeled ROLES at the right edge of the video */
+#role-panel::after {
+  content: "ROLES";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  transform: translateY(-50%);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  padding: 12px 4px;
+  background: var(--accent-medium);
+  border-radius: var(--radius) 0 0 var(--radius);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  transition: opacity 0.2s ease;
+}
+
+#role-panel:hover {
+  transform: translateY(-50%) translateX(0);
+}
+
+#role-panel:hover::after {
+  opacity: 0;
+}
+
+.rp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 4px;
+  position: sticky;
+  top: 0;
+}
+
+.rp-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.rp-btn {
+  font-size: 0.6rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.rp-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.rp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  transition: background 0.12s ease;
+}
+
+.rp-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.rp-num {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.rp-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+
+.rp-role {
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.rp-row.revealed {
+  background: var(--accent-dim);
+}
+
+.rp-row.revealed .rp-role {
+  color: var(--accent);
+}
+
+.rp-row.revealed .rp-name {
+  color: var(--text-secondary);
+}
+
+.rp-paw {
+  font-size: 0.6rem;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.rp-row.rp-wolf.revealed {
+  background: rgba(224, 72, 72, 0.14);
+}
+
+.rp-row.rp-wolf.revealed .rp-role {
+  color: var(--night-red);
+}
+
+.rp-empty {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  padding: 4px 2px;
 }

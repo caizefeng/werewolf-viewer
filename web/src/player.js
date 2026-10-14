@@ -33,9 +33,12 @@ export class WerewolfPlayer {
     this.resetMasksBtn = elements.resetMasksBtn;
     this.resetNightsBtn = elements.resetNightsBtn;
     this.nightJumpButtons = elements.nightJumpButtons;
+    this.rolePanel = elements.rolePanel;
 
     this.metadata = null;
     this.videoId = null;
+    this.roleMap = {};
+    this.revealed = new Set(); // reveal keys the user has un-blinded
     this._defaultNameMasks = null;
     this._defaultNightPhases = null;
     this.masksEnabled = true;
@@ -132,14 +135,20 @@ export class WerewolfPlayer {
       this._defaultNightPhases = JSON.parse(JSON.stringify(
         this.metadata.original_night_phases ?? this.metadata.night_phases));
       this.statusEl.textContent = `Loaded: ${this.metadata.night_phases.length} night phases, ${this.metadata.name_masks.length} mask regions`;
+      this.roleMap = this.metadata.role_map || {};
+      this._loadReveal();
       this.createNameMasks();
       this._renderNightMarkers();
+      this._renderRolePanel();
       return true;
     } catch (err) {
       // Clear stale UI from the previously loaded video
+      this.roleMap = {};
+      this.revealed = new Set();
       this.createNameMasks();
       this._renderNightMarkers();
       this._renderNightJumpButtons();
+      this._renderRolePanel();
       this.isNight = false;
       this._updateNightState();
       this.statusEl.textContent = `Failed to load metadata: ${err.message}`;
@@ -192,6 +201,16 @@ export class WerewolfPlayer {
       const side = this._maskSide(mask);
       const innerSide = side === "left" ? "right" : "left";
       const outerSide = side;
+
+      // Opaque fill in vertical segments, leaving a gap at each revealed
+      // player row so their role shows through (role-reveal panel)
+      for (const [segTop, segBot] of this._fillSegments(side, mask)) {
+        const fill = document.createElement("div");
+        fill.className = "name-mask-fill";
+        fill.style.top = `${segTop * 100}%`;
+        fill.style.height = `${(segBot - segTop) * 100}%`;
+        el.appendChild(fill);
+      }
 
       // Inner hover zone + handle
       const innerZone = document.createElement("div");
@@ -293,6 +312,200 @@ export class WerewolfPlayer {
       const outer = Math.max(mask.x + mask.w, left);
       mask.x = r4(left);
       mask.w = r4(outer - left);
+    }
+  }
+
+  // ── Role reveal ──
+
+  _revealKey(side, p) {
+    return `${side}:${p.y0}`;
+  }
+
+  _revealedBandsForSide(side) {
+    const players = (this.roleMap && this.roleMap[side]) || [];
+    return players
+      .filter((p) => this.revealed.has(this._revealKey(side, p)))
+      .map((p) => [p.y0, p.y1]);
+  }
+
+  // Opaque fill segments = the full mask column minus the revealed bands
+  _fillSegments(side, mask) {
+    const h = mask.h || 1;
+    const bands = this._revealedBandsForSide(side)
+      .map(([a, b]) => [(a - mask.y) / h, (b - mask.y) / h])
+      .map(([a, b]) => [Math.max(0, Math.min(1, a)), Math.max(0, Math.min(1, b))])
+      .filter(([a, b]) => b > a)
+      .sort((p, q) => p[0] - q[0]);
+    const merged = [];
+    for (const [a, b] of bands) {
+      if (merged.length && a <= merged[merged.length - 1][1]) {
+        merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], b);
+      } else {
+        merged.push([a, b]);
+      }
+    }
+    const segs = [];
+    let cur = 0;
+    for (const [a, b] of merged) {
+      if (a > cur) segs.push([cur, a]);
+      cur = Math.max(cur, b);
+    }
+    if (cur < 1) segs.push([cur, 1]);
+    return segs;
+  }
+
+  _allRevealKeys() {
+    const keys = [];
+    for (const side of ["left", "right"]) {
+      for (const p of (this.roleMap[side] || [])) keys.push(this._revealKey(side, p));
+    }
+    return keys;
+  }
+
+  _loadReveal() {
+    this.revealed = new Set();
+    if (!this.videoId) return;
+    try {
+      const raw = localStorage.getItem(`werewolf.reveal.${this.videoId}`);
+      if (raw) for (const k of JSON.parse(raw)) this.revealed.add(k);
+    } catch {}
+  }
+
+  _persistReveal() {
+    if (!this.videoId) return;
+    try {
+      localStorage.setItem(`werewolf.reveal.${this.videoId}`,
+        JSON.stringify([...this.revealed]));
+    } catch {}
+  }
+
+  _applyReveal() {
+    this.createNameMasks();
+    this._updateMaskVisibility(this.video.currentTime);
+    this._renderRolePanel();
+    this._persistReveal();
+  }
+
+  _setAllRevealed(on) {
+    this.revealed = new Set(on ? this._allRevealKeys() : []);
+    this.statusEl.textContent = on ? "All roles revealed" : "All roles hidden (blind)";
+    this._applyReveal();
+  }
+
+  // Wolf-aligned roles (any role whose name contains 狼) see each other at
+  // night, so revealing one reveals the whole pack — mimics playing as a wolf.
+  _isWolf(role) {
+    return !!role && role.includes("\u72fc");
+  }
+
+  _wolfKeys() {
+    const keys = [];
+    for (const side of ["left", "right"]) {
+      for (const p of (this.roleMap[side] || [])) {
+        if (this._isWolf(p.role)) keys.push(this._revealKey(side, p));
+      }
+    }
+    return keys;
+  }
+
+  _toggleReveal(key, side, p) {
+    const turningOn = !this.revealed.has(key);
+    if (this._isWolf(p.role)) {
+      // Reveal/hide the entire wolf team together
+      const keys = this._wolfKeys();
+      for (const k of keys) {
+        if (turningOn) this.revealed.add(k);
+        else this.revealed.delete(k);
+      }
+      this.statusEl.textContent = turningOn
+        ? `Revealed the wolf team (${keys.length})`
+        : "Hid the wolf team";
+    } else {
+      if (turningOn) this.revealed.add(key);
+      else this.revealed.delete(key);
+      const who = p.number != null ? `#${p.number}` : (p.name || "player");
+      this.statusEl.textContent = `${turningOn ? "Revealed" : "Hid"} ${who} (${p.role})`;
+    }
+    this._applyReveal();
+  }
+
+  _renderRolePanel() {
+    const panel = this.rolePanel;
+    if (!panel) return;
+    panel.innerHTML = "";
+    panel.classList.toggle("hidden", !this.metadata);
+    if (!this.metadata) return;
+
+    const rows = [];
+    for (const side of ["left", "right"]) {
+      for (const p of (this.roleMap[side] || [])) rows.push({ side, p });
+    }
+
+    const header = document.createElement("div");
+    header.className = "rp-header";
+    const title = document.createElement("span");
+    title.className = "rp-title";
+    title.textContent = "Roles";
+    header.appendChild(title);
+    if (rows.length) {
+      const grp = document.createElement("div");
+      grp.style.display = "flex";
+      grp.style.gap = "4px";
+      const blindBtn = document.createElement("button");
+      blindBtn.className = "rp-btn";
+      blindBtn.textContent = "Blind";
+      blindBtn.title = "Hide every role (default)";
+      blindBtn.addEventListener("click", () => this._setAllRevealed(false));
+      const allBtn = document.createElement("button");
+      allBtn.className = "rp-btn";
+      allBtn.textContent = "All";
+      allBtn.title = "Reveal every role";
+      allBtn.addEventListener("click", () => this._setAllRevealed(true));
+      grp.appendChild(blindBtn);
+      grp.appendChild(allBtn);
+      header.appendChild(grp);
+    }
+    panel.appendChild(header);
+
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "rp-empty";
+      empty.textContent = "No role map for this game. Click \u21bb Re-analyze in the library to map roles.";
+      panel.appendChild(empty);
+      return;
+    }
+
+    rows.sort((a, b) =>
+      (a.p.number ?? 99) - (b.p.number ?? 99) ||
+      a.side.localeCompare(b.side) || a.p.y0 - b.p.y0);
+
+    for (const { side, p } of rows) {
+      const key = this._revealKey(side, p);
+      const on = this.revealed.has(key);
+      const row = document.createElement("div");
+      row.className = "rp-row" + (on ? " revealed" : "");
+      const num = document.createElement("span");
+      num.className = "rp-num";
+      num.textContent = p.number != null ? p.number : (side === "left" ? "L" : "R");
+      const name = document.createElement("span");
+      name.className = "rp-name";
+      name.textContent = p.name || "\u2014";
+      const role = document.createElement("span");
+      role.className = "rp-role";
+      role.textContent = on ? p.role : "\u2022\u2022\u2022";
+      row.appendChild(num);
+      row.appendChild(name);
+      if (this._isWolf(p.role)) {
+        row.classList.add("rp-wolf");
+        row.title = "Wolf team — reveals/hides all wolves together";
+        const paw = document.createElement("span");
+        paw.className = "rp-paw";
+        paw.textContent = "\ud83d\udc3a";
+        row.appendChild(paw);
+      }
+      row.appendChild(role);
+      row.addEventListener("click", () => this._toggleReveal(key, side, p));
+      panel.appendChild(row);
     }
   }
 

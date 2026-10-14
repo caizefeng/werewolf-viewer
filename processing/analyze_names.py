@@ -9,6 +9,9 @@ import os
 # network check (faster init, works offline)
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
+import re
+from collections import Counter
+
 import cv2
 import numpy as np
 from paddleocr import PaddleOCR
@@ -25,6 +28,7 @@ ROLE_NAMES = [
     "舞者", "毒师", "白神", "蒙面人", "摄梦人", "白夜使者",
     "杠精",
 ]
+ROLE_SET = set(ROLE_NAMES)
 
 
 def sample_frames(video_path, start_sec=60, end_sec=300, interval=1):
@@ -60,190 +64,282 @@ def sample_frames(video_path, start_sec=60, end_sec=300, interval=1):
         cap.release()
 
 
-def detect_names_in_frame(ocr, frame, edge_ratio=0.2):
-    """Run OCR on left and right edges of frame, return role name bounding boxes.
+def ocr_items_in_frame(ocr, frame, edge_ratio=0.30, min_score=0.5):
+    """OCR the left and right edge strips, return every text box found.
 
-    Both edge crops go through a single predict() call to halve the
-    per-call overhead.
+    Both crops go through one predict() call. edge_ratio=0.30 keeps the
+    center stage out while capturing the director's note column, which sits
+    just inward of the role names. Coordinates are normalized to the full
+    frame. Boxes exceeding the crop width (PaddleOCR can inflate coords on
+    narrow crops) are dropped.
     """
     h, w = frame.shape[:2]
-    regions = []
-
     x_right = int(w * (1 - edge_ratio))
     crops = [
         ("left", 0, frame[:, :int(w * edge_ratio)]),
         ("right", x_right, frame[:, x_right:]),
     ]
-
     results = ocr.predict([c[2] for c in crops])
+    items = []
     for (side, x_offset, crop), result in zip(crops, results):
         crop_w = crop.shape[1]
-
         texts = result.get("rec_texts", [])
         scores = result.get("rec_scores", [])
         polys = result.get("dt_polys", [])
-
         for text, score, poly in zip(texts, scores, polys):
-            if score < 0.5:
+            if score < min_score:
                 continue
-            for role in ROLE_NAMES:
-                # Exact match only. The role column shows the bare role name;
-                # players' public notes ("没平民", "跳狼人") and the show
-                # watermark ("京城大师赛狼人杀") contain role words too, and
-                # substring matching let them widen the mask into the notes
-                # column (no spoiler there — those are public claims).
-                if text.strip() == role:
-                    poly = np.array(poly)
-                    x1, y1 = poly.min(axis=0)
-                    x2, y2 = poly.max(axis=0)
-                    # PaddleOCR may resize narrow crops internally and
-                    # return inflated coordinates — skip detections that
-                    # exceed the actual crop boundaries
-                    if x2 > crop_w:
-                        break
-                    regions.append({
-                        "x": round((x_offset + x1) / w, 4),
-                        "y": round(y1 / h, 4),
-                        "w": round((x2 - x1) / w, 4),
-                        "h": round((y2 - y1) / h, 4),
-                        "text": text,
-                        "side": side,
-                    })
-                    break
+            poly = np.array(poly)
+            x1, y1 = poly.min(axis=0)
+            x2, y2 = poly.max(axis=0)
+            if x2 > crop_w:
+                continue
+            items.append({
+                "side": side, "text": text.strip(), "score": float(score),
+                "x0": round((x_offset + x1) / w, 4),
+                "x1": round((x_offset + x2) / w, 4),
+                "y0": round(y1 / h, 4), "y1": round(y2 / h, 4),
+            })
+    return items
 
+
+def _roles_from_items(items):
+    """Exact role-name boxes from raw OCR items (exact match: notes and the
+    watermark contain role words too)."""
+    regions = []
+    for it in items:
+        if it["text"] in ROLE_SET:
+            regions.append({
+                "x": it["x0"], "y": it["y0"],
+                "w": round(it["x1"] - it["x0"], 4),
+                "h": round(it["y1"] - it["y0"], 4),
+                "text": it["text"], "side": it["side"],
+            })
     return regions
 
 
-def merge_regions(all_regions):
-    """Merge detected regions per side into mask areas covering role names only.
-
-    The mask covers only the role-name text and supplemental descriptions,
-    NOT the player avatar or number.  Height is always full-frame so that
-    names at any vertical position are hidden.
-    """
-    if not all_regions:
-        return []
-
-    merged = []
-    for side in ["left", "right"]:
-        side_regions = [r for r in all_regions if r["side"] == side]
-        if not side_regions:
-            continue
-
-        # Role names sit in one narrow vertical column, so the boxes agree
-        # on x to within a few pixels. Use percentile edges rather than
-        # min/max so one stray detection can't widen the mask.
-        x_lefts = np.array([r["x"] for r in side_regions])
-        x_rights = np.array([r["x"] + r["w"] for r in side_regions])
-        x_min = float(np.percentile(x_lefts, 10))
-        x_max = float(np.percentile(x_rights, 90))
-
-        # Only cover the text area (do NOT extend to the frame edge)
-        padding = 0.015
-        ext_x_min = max(0, x_min - padding)
-        ext_x_max = min(1, x_max + padding)
-
-        # Full frame height — covers names at any vertical position
-        merged.append({
-            "x": round(ext_x_min, 4),
-            "y": 0,
-            "w": round(ext_x_max - ext_x_min, 4),
-            "h": 1.0,
-        })
-
-    return merged
+def detect_names_in_frame(ocr, frame, edge_ratio=0.30):
+    """Run OCR on the frame edges, return role-name bounding boxes."""
+    return _roles_from_items(ocr_items_in_frame(ocr, frame, edge_ratio=edge_ratio))
 
 
 def analyze_name_regions_with_ocr(ocr, video_path):
     """Run name detection with a pre-initialized OCR instance.
 
-    Returns (masks, unique_texts) tuple.
+    Returns (masks, unique_texts) tuple (role map omitted).
     """
-    return _analyze(ocr, video_path)
+    masks, _role_map, texts = _analyze(ocr, video_path)
+    return masks, texts
 
 
-def _scan_range(ocr, video_path, start_sec, end_sec, interval, target_count=30):
-    """Scan a time range for name regions. Returns (regions, num_sampled)."""
+def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=8):
+    """Scan a range. Returns (regions, items, num_sampled).
+
+    Accumulates raw OCR items (for the role map) from frames containing role
+    names, stopping after min_named_frames such frames.
+    """
     all_regions = []
+    all_items = []
     found_any = False
+    named = 0
     num_sampled = 0
-
     gen = sample_frames(video_path, start_sec=start_sec, end_sec=end_sec,
                         interval=interval)
     try:
         for sec, frame in gen:
             num_sampled += 1
-            regions = detect_names_in_frame(ocr, frame)
+            items = ocr_items_in_frame(ocr, frame)
+            regions = _roles_from_items(items)
             if regions:
                 if not found_any:
                     print(f"  First names detected at {sec}s")
                     found_any = True
                 all_regions.extend(regions)
-                if len(all_regions) >= target_count:
-                    print(f"  Enough samples collected at {sec}s")
+                all_items.extend(items)
+                named += 1
+                if named >= min_named_frames:
+                    print(f"  Collected {named} named frames by {sec}s")
                     break
     finally:
         gen.close()
+    return all_regions, all_items, num_sampled
 
-    return all_regions, num_sampled
+
+def _cluster_rows(regs, tol=0.05):
+    """Group role boxes into player rows by vertical position (majority role
+    per row tolerates per-frame OCR noise)."""
+    pts = sorted((r["y"] + r["h"] / 2, r["text"]) for r in regs)
+    clusters = []
+    for yc, role in pts:
+        if clusters and yc - clusters[-1]["last"] <= tol:
+            c = clusters[-1]
+            c["ys"].append(yc); c["roles"].append(role); c["last"] = yc
+        else:
+            clusters.append({"ys": [yc], "roles": [role], "last": yc})
+    return [{"role": Counter(c["roles"]).most_common(1)[0][0],
+             "yc": float(np.median(c["ys"])), "count": len(c["ys"])}
+            for c in clusters]
+
+
+def _bands_from_centers(cs):
+    """Vertical reveal band for each row: midpoints to the adjacent rows."""
+    n = len(cs)
+    bands = []
+    for i, c in enumerate(cs):
+        up = (cs[i - 1] + c) / 2 if i > 0 else (c - (cs[i + 1] - c) / 2 if n > 1 else c - 0.08)
+        dn = (cs[i + 1] + c) / 2 if i < n - 1 else (c + (c - cs[i - 1]) / 2 if n > 1 else c + 0.08)
+        bands.append((max(0.0, up), min(1.0, dn)))
+    return bands
+
+
+def build_role_map(all_items, all_regions):
+    """Map each player row to its role, number, name, and reveal y-band.
+
+    Used by the viewer's role-reveal panel. The role string is only a menu
+    label (the revealed pixels are the source of truth), so OCR noise in it
+    is harmless.
+    """
+    role_map = {}
+    for side in ("left", "right"):
+        regs = [r for r in all_regions if r["side"] == side]
+        if not regs:
+            continue
+        rows = _cluster_rows(regs)
+        if not rows:
+            continue
+        rows.sort(key=lambda r: r["yc"])
+        bands = _bands_from_centers([r["yc"] for r in rows])
+        sit = [it for it in all_items if it["side"] == side]
+        rx0 = float(np.percentile([r["x"] for r in regs], 10))
+        rx1 = float(np.percentile([r["x"] + r["w"] for r in regs], 90))
+
+        nums = [[] for _ in rows]
+        names = [[] for _ in rows]
+        for it in sit:
+            yc = (it["y0"] + it["y1"]) / 2
+            bi = next((i for i, (a, b) in enumerate(bands) if a <= yc < b), None)
+            if bi is None:
+                continue
+            t = it["text"]
+            xc = (it["x0"] + it["x1"]) / 2
+            # Numbers and names sit outward of the role column (toward the
+            # frame edge); notes sit inward (toward center)
+            outward = xc < rx0 if side == "left" else xc > rx1
+            if not outward:
+                continue
+            if re.fullmatch(r"\d{1,2}", t):
+                v = int(t)
+                if 1 <= v <= 12:
+                    nums[bi].append(v)
+            elif t not in ROLE_SET and not re.fullmatch(r"[\W\d_]+", t) and 1 <= len(t) <= 5:
+                has_cjk = 1 if re.search(r"[\u4e00-\u9fff]", t) else 0
+                # Prefer Chinese names, then those nearest the role row
+                # (drops top-corner overlays like "RTX"/"VSR"), then score
+                names[bi].append((has_cjk, -round(abs(yc - rows[bi]["yc"]), 4),
+                                  it["score"], t))
+
+        players = []
+        for i, row in enumerate(rows):
+            number = Counter(nums[i]).most_common(1)[0][0] if nums[i] else None
+            name = max(names[i])[3] if names[i] else None
+            y0, y1 = bands[i]
+            players.append({"number": number, "name": name, "role": row["role"],
+                            "y0": round(y0, 4), "y1": round(y1, 4)})
+        players.sort(key=lambda p: (p["number"] is None,
+                                    p["number"] if p["number"] is not None else 0,
+                                    p["y0"]))
+        role_map[side] = players
+    return role_map
+
+
+# Fraction of frame width the mask extends inward past the role column, to
+# cover the director's running description/opinion next to each role
+# ("验9查杀", "觉得1不是狼"…) — those give the role away as much as the name.
+# Fixed (not measured): the note column is a fixed-width UI element, and
+# measuring it tripped over centered banners (title, config line, ticker).
+NOTE_EXTEND = 0.12
+
+
+def build_masks(all_regions):
+    """Mask each side's role column plus the adjacent note column.
+
+    Outer edge = role column edge (10th/90th percentile, so a stray box can't
+    widen it); inner edge = role edge + NOTE_EXTEND toward center, clamped so
+    the mask can never reach the central stage.
+    """
+    masks = []
+    pad = 0.015
+    for side in ("left", "right"):
+        regs = [r for r in all_regions if r["side"] == side]
+        if not regs:
+            continue
+        rx0 = float(np.percentile([r["x"] for r in regs], 10))
+        rx1 = float(np.percentile([r["x"] + r["w"] for r in regs], 90))
+        if side == "left":
+            x_min = max(0.0, rx0 - pad)
+            x_max = min(0.32, rx1 + NOTE_EXTEND)
+        else:
+            x_min = max(0.68, rx0 - NOTE_EXTEND)
+            x_max = min(1.0, rx1 + pad)
+        masks.append({"x": round(x_min, 4), "y": 0,
+                      "w": round(x_max - x_min, 4), "h": 1.0})
+    return masks
 
 
 def _analyze(ocr, video_path):
     """Core analysis logic shared by public entry points.
 
-    Returns (masks, unique_texts) where unique_texts is a set of detected
-    role name strings.
+    Returns (masks, role_map, unique_texts).
 
     Scans 1100s-1400s first. If both sides aren't found, extends the scan
     to 1400s-2000s with a coarser interval to find late-appearing names.
     """
-    # Primary scan: 1100s-1400s at 10s intervals
     print("Sampling frames (1100s-1400s at 10s intervals)...")
-    all_regions, num_sampled = _scan_range(
+    all_regions, all_items, num_sampled = _scan_range(
         ocr, video_path, 1100, 1400, interval=10)
     print(f"Processed {num_sampled} frames")
 
-    # Check if we have both sides covered
     sides_found = set(r["side"] for r in all_regions)
     missing_sides = {"left", "right"} - sides_found
 
     if missing_sides and all_regions:
-        # Found names on one side but not the other — extend scan
         print(f"  Missing {', '.join(missing_sides)} side. "
               f"Extending scan (1400s-2000s at 30s intervals)...")
-        extra_regions, extra_sampled = _scan_range(
-            ocr, video_path, 1400, 2000, interval=30, target_count=15)
-        num_sampled += extra_sampled
-        # Only add regions from the missing side(s)
-        for r in extra_regions:
-            if r["side"] in missing_sides:
-                all_regions.append(r)
-        print(f"  Extended scan: {extra_sampled} more frames")
+        er, ei, es = _scan_range(
+            ocr, video_path, 1400, 2000, interval=30, min_named_frames=4)
+        num_sampled += es
+        all_regions.extend(r for r in er if r["side"] in missing_sides)
+        all_items.extend(it for it in ei if it["side"] in missing_sides)
+        print(f"  Extended scan: {es} more frames")
 
     if not all_regions:
-        # No names at all — try the extended range before falling back
         print("  No names in primary range. Trying extended scan "
               "(1400s-2000s at 30s intervals)...")
-        all_regions, extra_sampled = _scan_range(
-            ocr, video_path, 1400, 2000, interval=30, target_count=15)
-        num_sampled += extra_sampled
-        print(f"  Extended scan: {extra_sampled} frames")
+        all_regions, all_items, es = _scan_range(
+            ocr, video_path, 1400, 2000, interval=30, min_named_frames=4)
+        num_sampled += es
+        print(f"  Extended scan: {es} frames")
 
     if not all_regions:
         print("No role names detected. Using default mask positions.")
         return [
-            {"x": 0.05, "y": 0, "w": 0.08, "h": 1.0},
-            {"x": 0.87, "y": 0, "w": 0.08, "h": 1.0},
-        ], set()
+            {"x": 0.05, "y": 0, "w": 0.10, "h": 1.0},
+            {"x": 0.85, "y": 0, "w": 0.10, "h": 1.0},
+        ], {}, set()
 
     unique_texts = set(r["text"] for r in all_regions)
-    print(f"Detected texts: {', '.join(unique_texts)}")
+    print(f"Detected texts: {', '.join(sorted(unique_texts))}")
 
-    merged = merge_regions(all_regions)
-    print(f"Merged into {len(merged)} mask region(s)")
-    for m in merged:
+    masks = build_masks(all_regions)
+    role_map = build_role_map(all_items, all_regions)
+    print(f"Merged into {len(masks)} mask region(s)")
+    for m in masks:
         print(f"  x={m['x']:.3f} y={m['y']:.3f} w={m['w']:.3f} h={m['h']:.3f}")
-    return merged, unique_texts
+    for sd, players in role_map.items():
+        print(f"  role_map[{sd}]: " + ", ".join(
+            f"{p['number'] if p['number'] is not None else '?'}={p['role']}"
+            for p in players))
+    return masks, role_map, unique_texts
 
 
 def _ensure_models():
@@ -324,11 +420,16 @@ def _init_ocr():
 
 
 def analyze_name_regions(video_path):
-    """Main entry point: sample frames, OCR, merge regions."""
+    """Main entry point: masks only (backward-compatible)."""
+    return analyze_name_regions_full(video_path)["name_masks"]
+
+
+def analyze_name_regions_full(video_path):
+    """Full name-detection result: {"name_masks": [...], "role_map": {...}}."""
     print("Initializing PaddleOCR...")
     ocr = _init_ocr()
-    masks, _texts = _analyze(ocr, video_path)
-    return masks
+    masks, role_map, _texts = _analyze(ocr, video_path)
+    return {"name_masks": masks, "role_map": role_map}
 
 
 if __name__ == "__main__":
@@ -336,5 +437,5 @@ if __name__ == "__main__":
     parser.add_argument("video_path", help="Path to video file")
     args = parser.parse_args()
 
-    regions = analyze_name_regions(args.video_path)
-    print(json.dumps(regions, indent=2))
+    result = analyze_name_regions_full(args.video_path)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

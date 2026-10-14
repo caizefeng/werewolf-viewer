@@ -28,6 +28,7 @@ function getElements() {
     resetMasksBtn: document.getElementById("reset-masks-btn"),
     resetNightsBtn: document.getElementById("reset-nights-btn"),
     nightJumpButtons: document.getElementById("night-jump-buttons"),
+    rolePanel: document.getElementById("role-panel"),
   };
 }
 

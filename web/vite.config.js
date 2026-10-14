@@ -68,6 +68,44 @@ function errorTail(log) {
   return (errors.length ? errors : lines).slice(-3).join("\n").trim();
 }
 
+// Spawn analyze.py for activeJob.videoId: phase 2 of a download job, or a
+// standalone re-analysis via /api/analyze. Caller has set activeJob.
+function startAnalysis(videoId) {
+  activeJob.phase = "processing";
+  activeJob.phaseStartedAt = Date.now();
+  activeJob.log.push("--- Starting analysis ---\n");
+  const anProc = spawn(venvPython, [
+    path.join(processingDir, "analyze.py"),
+    `--video-id=${videoId}`,
+  ], {
+    cwd: processingDir,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  activeJob.proc = anProc;
+
+  anProc.stdout.on("data", (d) => activeJob.log.push(d.toString()));
+  anProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
+
+  anProc.on("error", (err) => {
+    if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
+    activeJob.error = `Failed to start analysis: ${err.message}`;
+    activeJob.phase = "done";
+    activeJob.done = true;
+    activeJob.proc = null;
+  });
+
+  anProc.on("close", (code2) => {
+    if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
+    if (code2 !== 0) {
+      activeJob.error = errorTail(activeJob.log) || `Analysis failed (exit ${code2})`;
+    }
+    activeJob.phase = "done";
+    activeJob.done = true;
+    activeJob.proc = null;
+  });
+}
+
 // Browsers attach an Origin header to cross-site POSTs (including
 // preflight-free text/plain ones), so a malicious page on the LAN could
 // otherwise trigger downloads/deletes. Same-origin requests and curl pass.
@@ -222,43 +260,22 @@ export default defineConfig({
                 return;
               }
 
-              // Phase 2: Analyze
-              activeJob.phase = "processing";
-              activeJob.phaseStartedAt = Date.now();
-              activeJob.log.push("--- Starting analysis ---\n");
-              const videoPath = path.join(outputDir, "video.mp4");
-              const anProc = spawn(venvPython, [
-                path.join(processingDir, "analyze.py"),
-                `--video-id=${videoId}`,
-              ], {
-                cwd: processingDir,
-                stdio: ["ignore", "pipe", "pipe"],
-                detached: true,
-              });
-              activeJob.proc = anProc;
-
-              anProc.stdout.on("data", (d) => activeJob.log.push(d.toString()));
-              anProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
-
-              anProc.on("error", (err) => {
-                if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
-                activeJob.error = `Failed to start analysis: ${err.message}`;
-                activeJob.phase = "done";
-                activeJob.done = true;
-                activeJob.proc = null;
-              });
-
-              anProc.on("close", (code2) => {
-                if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
-                if (code2 !== 0) {
-                  activeJob.error = errorTail(activeJob.log) || `Analysis failed (exit ${code2})`;
-                }
-                activeJob.phase = "done";
-                activeJob.done = true;
-                activeJob.proc = null;
-              });
+              startAnalysis(videoId);
             });
 
+            return jsonResponse(res, 200, { started: true, videoId });
+          }
+
+          // API: re-run analysis on an already-downloaded video (e.g. after
+          // detection improvements) without re-downloading it
+          if (url === "/api/analyze" && req.method === "POST") {
+            if (blockCrossOrigin(req, res)) return;
+            const { videoId } = await readBody(req);
+            if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
+            if (activeJob && !activeJob.done) return jsonResponse(res, 409, { error: "A job is already running", jobVideoId: activeJob.videoId });
+            if (!fs.existsSync(path.join(videosDir, videoId, "video.mp4"))) return jsonResponse(res, 404, { error: "Video not downloaded" });
+            activeJob = { videoId, kind: "analyze", proc: null, phase: "processing", log: [], done: false, error: null, phaseStartedAt: Date.now() };
+            startAnalysis(videoId);
             return jsonResponse(res, 200, { started: true, videoId });
           }
 
@@ -268,6 +285,7 @@ export default defineConfig({
             return jsonResponse(res, 200, {
               active: !activeJob.done,
               videoId: activeJob.videoId,
+              kind: activeJob.kind || "download",
               phase: activeJob.phase,
               done: activeJob.done,
               error: activeJob.error,

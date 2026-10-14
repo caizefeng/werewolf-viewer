@@ -144,10 +144,15 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Computes frame-to-frame pixel diff (`cv2.absdiff`, mean) to distinguish:
   - Real day/night transitions: small diff (~20-30), same scene with lighting change
   - Camera cuts (close-up ↔ table): large diff (~60-80), different scene
-- Pipeline: find_red_clusters → merge_clusters → filter_cut_bounded_phases → filter by min duration (35s) → add ±2s buffer
+- Pipeline: find_red_clusters → merge_clusters → filter_cut_bounded_phases → filter by min duration (35s) → **refine_boundaries** → add buffers
+- **refine_boundaries**: a raw boundary from the 2s grid is only known to within one interval, which
+  made the overlay lead vary between ~1s and ~4s. Each boundary window — (start−2s, start] for red-on,
+  [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding
+  sequentially (`_scan_window`), so buffers apply to the actual light transition. Output times are
+  floats (2 decimals). Buffers: `ENTRY_BUFFER=2.0` before red-on, `EXIT_BUFFER=1.0` after red-off
 - **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps.
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases
-- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=3.5`, `EXIT_BUFFER=2`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
+- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
 - Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
 
 ### Name Mask Detection (analyze_names.py)
@@ -160,8 +165,14 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Scans left/right 20% edges of frames sampled from **1100s-1400s** (shifted from 1000-1300 for better generalizability)
 - **Extended scan**: if one side is missing after primary range, extends to 1400s-2000s at 30s intervals
 - **Lazy generator**: `sample_frames` yields frames on demand, stops reading when enough names found (typically ~4 frames instead of 30)
-- Merges detected regions per side, full frame height
-- Masks only cover role name text, NOT player avatars/numbers
+- **Exact-match only** (`text.strip() == role`): the role column shows the bare role name, while
+  players' public notes ("没平民", "跳狼人") and the watermark contain role words too. Substring
+  matching let notes widen masks into the notes column (S22 right masks came out 0.785 instead of
+  ~0.862; some left masks 0.19 instead of 0.14). Notes are public claims, not spoilers
+- Merges detected regions per side using **10th/90th percentile** x-edges (+0.015 padding), full
+  frame height, so one stray box can't widen the mask
+- Masks only cover role name text, NOT player avatars/numbers (the player's Full mask mode extends
+  them to the frame edge at render time)
 
 ### Pipeline Parallelism (analyze.py)
 - Default: runs night + name detection in **separate processes** (subprocess for name detection)
@@ -194,12 +205,17 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Fullscreen via Fullscreen API on wrapper element
 - Sidebar with two tabs: video list + download management
 - Download management: search YouTube, download+process, stop, delete
+- Library items have a ↻ **Re-analyze** button (`POST /api/analyze`): re-runs analyze.py on the
+  downloaded video (e.g. after detection improvements) and reloads metadata if that video is open.
+  Replaces manual edits (confirm dialog)
+- Info bar shows the open video's title (also set as the document title)
+- Volume and user mute are remembered per browser (localStorage); the night auto-mute is never persisted
   - Stop during download deletes the partial dir; stop during analysis keeps the video
 - Time display shows h:mm:ss above one hour
 - Mute button (🔊/🔇) beside the volume slider. `userMuted` tracks a deliberate mute
   separately from the night auto-mute: dawn only unmutes if the user didn't mute, and
   unmuting during a night phase (masks on) takes effect at dawn rather than immediately
-- Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s
+- Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s, N=next night start, Shift+N=previous
 
 ## API Endpoints (vite.config.js middleware)
 - `GET /api/videos` - list videos with metadata.json
@@ -211,7 +227,8 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   aged out of the recent window (the channel posts ~3 games/day, so 200 uploads ≈ 2 months;
   this is why S22E39/S22E41 returned "no results" in 2026-10 before source 2 was added)
 - `POST /api/download` - start download+process job (body: {videoId})
-- `GET /api/job-status` - poll active job status
+- `POST /api/analyze` - re-run analysis on a downloaded video (body: {videoId}); 404 if no video.mp4, 409 if a job is running
+- `GET /api/job-status` - poll active job status (`kind`: "download" | "analyze")
 - `POST /api/stop` - stop active job (deletes dir only if still downloading)
 - `POST /api/delete` - delete video dir (body: {videoId})
 - `POST /api/metadata` - persist edited night_phases/name_masks to metadata.json (body: {videoId, night_phases, name_masks}); preserves originals in original_* fields

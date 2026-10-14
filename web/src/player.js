@@ -6,6 +6,7 @@
 // Per-browser preference: "full" extends masks to the frame edges (hides
 // player names/avatars too); "role" covers only the role-name boxes
 const MASK_MODE_KEY = "werewolf.maskMode";
+const VOLUME_KEY = "werewolf.volume"; // {volume, muted} as last set by the user
 
 export class WerewolfPlayer {
   constructor(elements) {
@@ -47,6 +48,7 @@ export class WerewolfPlayer {
 
     this._bindEvents();
     this._updateMaskModeBtn();
+    this._restoreVolume();
   }
 
   // ── Events ──
@@ -78,6 +80,7 @@ export class WerewolfPlayer {
       this.video.muted = v === 0;
       this.userMuted = v === 0;
       this.savedVolume = v || this.savedVolume;
+      this._persistVolume();
     });
 
     // Mute toggle
@@ -721,6 +724,27 @@ export class WerewolfPlayer {
       if (this.video.volume === 0) this.video.volume = this.savedVolume || 1;
     }
     this._updateMuteBtn();
+    this._persistVolume();
+  }
+
+  // Remember the user's volume/mute choice across reloads (user intent only:
+  // the night auto-mute is never persisted)
+  _persistVolume() {
+    try {
+      localStorage.setItem(VOLUME_KEY, JSON.stringify({ volume: this.savedVolume, muted: this.userMuted }));
+    } catch {}
+  }
+
+  _restoreVolume() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(VOLUME_KEY)); } catch {}
+    if (!saved || typeof saved.volume !== "number") return;
+    this.savedVolume = Math.min(1, Math.max(0, saved.volume)) || 1;
+    this.userMuted = !!saved.muted;
+    this.video.volume = this.savedVolume;
+    this.video.muted = this.userMuted;
+    this.volumeSlider.value = this.userMuted ? 0 : this.savedVolume;
+    this._updateMuteBtn();
   }
 
   _updateMuteBtn() {
@@ -748,6 +772,18 @@ export class WerewolfPlayer {
         e.preventDefault();
         this._toggleFullscreen();
         break;
+      case "n":
+      case "N": {
+        // N = jump to next night start, Shift+N = previous
+        e.preventDefault();
+        const starts = (this.metadata?.night_phases || []).map((p) => p.start).sort((a, b) => a - b);
+        const t = this.video.currentTime;
+        const target = e.shiftKey
+          ? [...starts].reverse().find((s) => s < t - 1)
+          : starts.find((s) => s > t + 1);
+        if (target !== undefined) this.video.currentTime = target;
+        break;
+      }
       case "ArrowLeft":
         e.preventDefault();
         if (isFinite(this.video.duration)) {

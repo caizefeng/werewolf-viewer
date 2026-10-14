@@ -472,6 +472,12 @@ header h1::after {
   background: var(--night-dim);
 }
 
+.video-re-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-medium);
+  background: var(--accent-dim);
+}
+
 #video-list li:hover {
   background: rgba(255, 255, 255, 0.025);
   color: var(--text-secondary);
@@ -1103,6 +1109,16 @@ header h1::after {
   gap: 1rem;
   padding: 0.5rem 1rem;
   border-top: 1px solid var(--border-subtle);
+}
+
+.video-title-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
 }
 
 .status {

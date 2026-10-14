@@ -70,7 +70,17 @@ async function loadVideoList() {
         deleteVideo(v.id);
       });
 
+      const reBtn = document.createElement("button");
+      reBtn.className = "video-del-btn video-re-btn";
+      reBtn.textContent = "↻";
+      reBtn.title = "Re-analyze (re-run night + name detection)";
+      reBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        reanalyzeVideo(v.id);
+      });
+
       li.appendChild(titleSpan);
+      li.appendChild(reBtn);
       li.appendChild(delBtn);
       li.addEventListener("click", () => switchVideo(v.id));
       list.appendChild(li);
@@ -99,6 +109,11 @@ async function switchVideo(videoId) {
   video.pause();
   video.removeAttribute("src");
   video.load();
+
+  // Show which video is open
+  const title = document.querySelector(`#video-list li[data-id="${videoId}"] .video-title`)?.textContent || videoId;
+  document.getElementById("video-title").textContent = title;
+  document.title = `${title} – Werewolf Viewer`;
 
   // Load new metadata and video
   player.videoId = videoId;
@@ -374,11 +389,19 @@ function startJobPolling(videoId) {
           setStepState(vid, step, "error", "");
           showErrorMessage(vid, status.error);
           updateButtonState(vid, "error");
+          if (status.kind === "analyze") {
+            document.getElementById("status").textContent = `Re-analysis failed: ${status.error}`;
+          }
         } else {
           const elapsed = formatElapsed(Date.now() - phaseStartTime);
           setStepState(vid, "analysis", "done", elapsed);
           updateButtonState(vid, "done");
           loadVideoList();
+          if (status.kind === "analyze") {
+            document.getElementById("status").textContent = `Re-analysis complete (${elapsed})`;
+            // Pick up the regenerated night phases / masks if this video is open
+            if (vid === currentVideoId) player.loadMetadata(`/${vid}/metadata.json`);
+          }
         }
         phaseStartTime = null;
         lastPhase = null;
@@ -405,6 +428,27 @@ async function stopJob() {
   try {
     await fetch("/api/stop", { method: "POST" });
   } catch {}
+}
+
+async function reanalyzeVideo(videoId) {
+  if (!confirm("Re-run night and name detection for this video?\nManual edits to its masks and night phases will be replaced.")) return;
+  try {
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoId }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert(`Re-analyze failed: ${data.error}`);
+      return;
+    }
+    document.getElementById("status").textContent = "Re-analyzing (night + name detection)…";
+    phaseStartTime = Date.now();
+    startJobPolling(videoId);
+  } catch (err) {
+    alert(`Re-analyze failed: ${err.message}`);
+  }
 }
 
 async function deleteVideo(videoId) {

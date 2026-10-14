@@ -24,8 +24,9 @@ import numpy as np
 
 
 RED_THRESH = 2.5   # R/G ratio indicating red ambient light (night, table view)
-ENTRY_BUFFER = 3.5  # seconds of buffer before night entry
-EXIT_BUFFER = 2     # seconds of buffer after night exit
+ENTRY_BUFFER = 2.0  # seconds the overlay starts before the light turns red
+EXIT_BUFFER = 1.0   # seconds the overlay lasts after the light stops being red
+REFINE_STEP = 0.25  # seconds; fine-scan resolution for boundary refinement
 CUT_THRESH = 40    # frame diff above this = camera cut (not a lighting change)
 MIN_PHASE_DURATION = 35  # minimum raw phase duration in seconds (filters false positives)
 
@@ -36,6 +37,14 @@ def _compute_rg_ratio(roi):
     """Compute R/G color ratio for a region of interest."""
     mean = roi.mean(axis=(0, 1))
     return mean[2] / (mean[1] + 1)
+
+
+def _frame_redness(frame):
+    """Max R/G ratio over the bottom-left and bottom-right corner ROIs."""
+    h, w = frame.shape[:2]
+    bl = frame[int(h * 0.88):int(h * 0.93), int(w * 0.02):int(w * 0.12)]
+    br = frame[int(h * 0.88):int(h * 0.93), int(w * 0.88):int(w * 0.98)]
+    return max(_compute_rg_ratio(bl), _compute_rg_ratio(br))
 
 
 def _scan_segment(args):
@@ -88,13 +97,8 @@ def _scan_segment(args):
         if not ret:
             break
         pos += 1
-        h, w = frame.shape[:2]
-        bl = frame[int(h * 0.88):int(h * 0.93), int(w * 0.02):int(w * 0.12)]
-        br = frame[int(h * 0.88):int(h * 0.93), int(w * 0.88):int(w * 0.98)]
-        rg_bl = _compute_rg_ratio(bl)
-        rg_br = _compute_rg_ratio(br)
         timestamps.append(sec)
-        ratios.append(max(rg_bl, rg_br))
+        ratios.append(_frame_redness(frame))
 
         if prev_frame is not None:
             diffs.append(cv2.absdiff(frame, prev_frame).mean())
@@ -174,13 +178,8 @@ def _scan_sequential(video_path, fps, duration):
         if not ret:
             break
         pos += 1
-        h, w = frame.shape[:2]
-        bl = frame[int(h * 0.88):int(h * 0.93), int(w * 0.02):int(w * 0.12)]
-        br = frame[int(h * 0.88):int(h * 0.93), int(w * 0.88):int(w * 0.98)]
-        rg_bl = _compute_rg_ratio(bl)
-        rg_br = _compute_rg_ratio(br)
         timestamps.append(sec)
-        ratios.append(max(rg_bl, rg_br))
+        ratios.append(_frame_redness(frame))
 
         if prev_frame is not None:
             diffs.append(cv2.absdiff(frame, prev_frame).mean())
@@ -310,6 +309,62 @@ def filter_cut_bounded_phases(phases, timestamps, diffs, cut_thresh=CUT_THRESH):
     return result
 
 
+def _scan_window(cap, fps, t0, t1, step=REFINE_STEP):
+    """Yield (t, redness) for t in [t0, t1) at `step` resolution.
+
+    Seeks once, then decodes sequentially (a seek per sample would decode
+    from the previous keyframe every time).
+    """
+    pos = int(round(t0 * fps))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+    for k in range(int(round((t1 - t0) / step))):
+        t = t0 + k * step
+        target = int(round(t * fps))
+        while pos < target and cap.grab():
+            pos += 1
+        ret, frame = cap.read()
+        if not ret:
+            return
+        pos += 1
+        yield t, _frame_redness(frame)
+
+
+def refine_boundaries(video_path, phases, threshold=RED_THRESH):
+    """Locate each phase's exact red-on / red-off time.
+
+    The coarse scan samples every SCAN_INTERVAL seconds, so a raw boundary
+    is only known to within one interval: the light turned red somewhere
+    in (start - 2*SCAN_INTERVAL, start] (two intervals: see below) and
+    stopped being red somewhere in [end, end + SCAN_INTERVAL). Re-scan
+    those windows at REFINE_STEP so the
+    buffers apply to the real transition instead of the sample grid (which
+    made the overlay lead vary between ~1s and ~4s).
+    """
+    if not phases:
+        return phases
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    refined = []
+    for s, e in phases:
+        # Entry: look back two intervals, not one. A brief camera cut can
+        # land exactly on the first red grid sample after the light comes
+        # on, which pushes the cluster start one interval late; the real
+        # red-on is then just before the (non-red) previous grid sample.
+        on = float(s)
+        for t, r in _scan_window(cap, fps, s - 2 * SCAN_INTERVAL + REFINE_STEP, s):
+            if r >= threshold:
+                on = t
+                break
+        off = float(e)
+        for t, r in _scan_window(cap, fps, e + REFINE_STEP, e + SCAN_INTERVAL):
+            if r < threshold:
+                break
+            off = t
+        refined.append((on, off))
+    cap.release()
+    return refined
+
+
 def analyze_night_phases(video_path, num_workers=0):
     """Detect night phases via bottom-corner ambient light color.
 
@@ -338,12 +393,13 @@ def analyze_night_phases(video_path, num_workers=0):
     # Filter phases starting at the very beginning (intro red lighting, not real night)
     phases = [(s, e) for s, e in phases if s > 0]
 
-    # Add buffer to each boundary
+    # Pin each boundary to the actual light transition, then add buffers
+    phases = refine_boundaries(video_path, phases)
     results = []
     for s, e in phases:
         results.append({
-            "start": max(0, int(s - ENTRY_BUFFER)),
-            "end": min(duration - 1, int(e + EXIT_BUFFER)),
+            "start": round(max(0, s - ENTRY_BUFFER), 2),
+            "end": round(min(duration - 1, e + EXIT_BUFFER), 2),
         })
 
     print(f"Found {len(results)} night phase(s)")
@@ -351,10 +407,10 @@ def analyze_night_phases(video_path, num_workers=0):
         s, e = p["start"], p["end"]
         dur = e - s
         def _fmt(t):
-            m, sec = divmod(t, 60)
+            m, sec = divmod(int(t), 60)
             h, m = divmod(m, 60)
             return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
-        print(f"  {_fmt(s)} - {_fmt(e)} ({dur}s)")
+        print(f"  {_fmt(s)} - {_fmt(e)} ({dur:.0f}s)")
 
     return results
 

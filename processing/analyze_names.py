@@ -87,12 +87,12 @@ def detect_names_in_frame(ocr, frame, edge_ratio=0.2):
             if score < 0.5:
                 continue
             for role in ROLE_NAMES:
-                if role in text:
-                    # Reject if the detected text is much longer than the
-                    # role name — likely a watermark or show title, not a
-                    # player role label (e.g. "京城大师赛狼人")
-                    if len(text) > len(role) + 2:
-                        break
+                # Exact match only. The role column shows the bare role name;
+                # players' public notes ("没平民", "跳狼人") and the show
+                # watermark ("京城大师赛狼人杀") contain role words too, and
+                # substring matching let them widen the mask into the notes
+                # column (no spoiler there — those are public claims).
+                if text.strip() == role:
                     poly = np.array(poly)
                     x1, y1 = poly.min(axis=0)
                     x2, y2 = poly.max(axis=0)
@@ -130,8 +130,13 @@ def merge_regions(all_regions):
         if not side_regions:
             continue
 
-        x_min = min(r["x"] for r in side_regions)
-        x_max = max(r["x"] + r["w"] for r in side_regions)
+        # Role names sit in one narrow vertical column, so the boxes agree
+        # on x to within a few pixels. Use percentile edges rather than
+        # min/max so one stray detection can't widen the mask.
+        x_lefts = np.array([r["x"] for r in side_regions])
+        x_rights = np.array([r["x"] + r["w"] for r in side_regions])
+        x_min = float(np.percentile(x_lefts, 10))
+        x_max = float(np.percentile(x_rights, 90))
 
         # Only cover the text area (do NOT extend to the frame edge)
         padding = 0.015

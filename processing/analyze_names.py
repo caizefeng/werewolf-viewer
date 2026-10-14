@@ -30,6 +30,11 @@ ROLE_NAMES = [
 ]
 ROLE_SET = set(ROLE_NAMES)
 
+# Hardware/stream overlay tokens that sit in the name column area but are not
+# player names (GPU badges, quality tags, the channel handle)
+NAME_STOPWORDS = {"rtx", "vsr", "hdr", "fps", "live", "hd", "4k", "8k", "ai",
+                  "vip", "youtube", "jcdss", "new"}
+
 
 def sample_frames(video_path, start_sec=60, end_sec=300, interval=1):
     """Yield (sec, frame) tuples from video at given interval.
@@ -231,7 +236,8 @@ def build_role_map(all_items, all_regions):
                 v = int(t)
                 if 1 <= v <= 12:
                     nums[bi].append(v)
-            elif t not in ROLE_SET and not re.fullmatch(r"[\W\d_]+", t) and 1 <= len(t) <= 5:
+            elif (t not in ROLE_SET and t.lower() not in NAME_STOPWORDS
+                  and not re.fullmatch(r"[\W\d_]+", t) and 1 <= len(t) <= 5):
                 has_cjk = 1 if re.search(r"[\u4e00-\u9fff]", t) else 0
                 # Prefer Chinese names, then those nearest the role row
                 # (drops top-corner overlays like "RTX"/"VSR"), then score

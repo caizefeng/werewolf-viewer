@@ -119,13 +119,30 @@ function blockCrossOrigin(req, res) {
   return true;
 }
 
-function readBody(req) {
+const MAX_BODY_BYTES = 1_000_000;
+
+// Parse a JSON body. Resolves null (after answering 413) when the body is
+// over the cap, so handlers must bail out on null.
+function readBody(req, res) {
   return new Promise((resolve) => {
     let body = "";
-    req.on("data", (c) => (body += c));
+    let tooBig = false;
+    req.on("data", (c) => {
+      if (tooBig) return;
+      body += c;
+      if (body.length > MAX_BODY_BYTES) {
+        tooBig = true;
+        body = "";
+        try { jsonResponse(res, 413, { error: "Body too large" }); } catch {}
+        req.destroy();
+        resolve(null);
+      }
+    });
     req.on("end", () => {
+      if (tooBig) return;
       try { resolve(JSON.parse(body)); } catch { resolve({}); }
     });
+    req.on("error", () => { if (!tooBig) resolve({}); });
   });
 }
 
@@ -165,7 +182,12 @@ export default defineConfig({
                       title = info.title || d.name;
                     } catch {}
                   }
-                  return { id: d.name, title };
+                  let closeVision = false;
+                  try {
+                    const meta = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf-8"));
+                    closeVision = !!meta.close_vision;
+                  } catch {}
+                  return { id: d.name, title, closeVision };
                 });
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify(dirs));
@@ -184,7 +206,9 @@ export default defineConfig({
           // posts ~3 games/day, so 200 uploads is only ~2 months).
           if (url === "/api/search" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
-            const { query } = await readBody(req);
+            const body = await readBody(req, res);
+            if (!body) return;
+            const { query } = body;
             if (!query) return jsonResponse(res, 400, { error: "Missing query" });
 
             // Split query into keywords; video must contain ALL keywords
@@ -221,7 +245,9 @@ export default defineConfig({
           // API: start download + process
           if (url === "/api/download" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
-            const { videoId } = await readBody(req);
+            const body = await readBody(req, res);
+            if (!body) return;
+            const { videoId } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
             if (activeJob && !activeJob.done) return jsonResponse(res, 409, { error: "A job is already running", jobVideoId: activeJob.videoId });
 
@@ -270,7 +296,9 @@ export default defineConfig({
           // detection improvements) without re-downloading it
           if (url === "/api/analyze" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
-            const { videoId } = await readBody(req);
+            const body = await readBody(req, res);
+            if (!body) return;
+            const { videoId } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
             if (activeJob && !activeJob.done) return jsonResponse(res, 409, { error: "A job is already running", jobVideoId: activeJob.videoId });
             if (!fs.existsSync(path.join(videosDir, videoId, "video.mp4"))) return jsonResponse(res, 404, { error: "Video not downloaded" });
@@ -321,7 +349,9 @@ export default defineConfig({
           // API: delete a video
           if (url === "/api/delete" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
-            const { videoId } = await readBody(req);
+            const body = await readBody(req, res);
+            if (!body) return;
+            const { videoId } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
             const dir = path.join(videosDir, videoId);
             if (!fs.existsSync(dir)) return jsonResponse(res, 404, { error: "Not found" });
@@ -334,7 +364,9 @@ export default defineConfig({
           // first save so the player's Reset buttons can restore them.
           if (url === "/api/metadata" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
-            const { videoId, night_phases, name_masks } = await readBody(req);
+            const body = await readBody(req, res);
+            if (!body) return;
+            const { videoId, night_phases, name_masks } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
             const phasesOk = Array.isArray(night_phases) && night_phases.every(
               (p) => p && Number.isFinite(p.start) && Number.isFinite(p.end));
@@ -421,18 +453,24 @@ export default defineConfig({
                   "Content-Length": chunkSize,
                   "Content-Type": mime,
                 });
-                fs.createReadStream(filePath, { start, end }).pipe(res);
+                const stream = fs.createReadStream(filePath, { start, end });
+                res.on("close", () => stream.destroy());
+                stream.pipe(res);
               } else {
                 res.writeHead(200, {
                   "Content-Length": stat.size,
                   "Content-Type": mime,
                   "Accept-Ranges": "bytes",
                 });
-                fs.createReadStream(filePath).pipe(res);
+                const stream = fs.createReadStream(filePath);
+                res.on("close", () => stream.destroy());
+                stream.pipe(res);
               }
             } else {
               res.writeHead(200, { "Content-Type": mime });
-              fs.createReadStream(filePath).pipe(res);
+              const stream = fs.createReadStream(filePath);
+              res.on("close", () => stream.destroy());
+              stream.pipe(res);
             }
             return;
           }

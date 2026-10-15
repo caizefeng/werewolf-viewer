@@ -30,10 +30,16 @@ ROLE_NAMES = [
 ]
 ROLE_SET = set(ROLE_NAMES)
 
-# Hardware/stream overlay tokens that sit in the name column area but are not
-# player names (GPU badges, quality tags, the channel handle)
-NAME_STOPWORDS = {"rtx", "vsr", "hdr", "fps", "live", "hd", "4k", "8k", "ai",
-                  "vip", "youtube", "jcdss", "new"}
+# Standard 12-player sidebar layout: seats 1-6 top-to-bottom on the left,
+# 7-12 on the right, at a fixed row pitch. Used to infer a row's seat number
+# from its vertical position whenever its number badge wasn't OCR'd.
+SEAT_BASE = {"left": 1, "right": 7}
+SEAT_ROW_SPACING = 0.16   # fallback row pitch (fraction of frame height)
+SEAT_FIRST_ROW_Y = 0.125  # fallback center of the first row
+
+# Label the broadcast shows instead of a role in "close-vision" games
+# (the audience is kept blind until a role is revealed in-game)
+UNKNOWN_LABEL = "未知"
 
 
 def sample_frames(video_path, start_sec=60, end_sec=300, interval=1):
@@ -123,6 +129,80 @@ def _roles_from_items(items):
     return regions
 
 
+def _levenshtein(a, b):
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _snap_role(text):
+    """Map an OCR'd role-column label to the role it most likely is.
+
+    OCR of the vertical labels occasionally drops or adds a character
+    ("械狼" for 机械狼, "狼人学" for 狼人, "自神" for 白神). Containment in
+    either direction wins, then edit distance 1; anything further apart
+    (including 未知) stays unmatched.
+    """
+    if text in ROLE_SET:
+        return text
+    if len(text) < 2:
+        return None
+    best = None
+    for role in ROLE_NAMES:
+        if role in text or text in role:
+            cand = (0, abs(len(role) - len(text)), role)
+        elif _levenshtein(text, role) <= 1:
+            cand = (1, 1, role)
+        else:
+            continue
+        if best is None or cand < best:
+            best = cand
+    return best[2] if best else None
+
+
+def _recover_misread_roles(all_regions, all_items):
+    """Add role boxes for role-column labels the OCR misread.
+
+    The role column's x-range is known from the exact matches. Any short CJK
+    box centered in that column that isn't an exact role is a misread role
+    label (notes sit inward of the column, numbers outward), so snap it to
+    the nearest role name. Without this a misread row vanishes from the
+    role map and can't be revealed.
+    """
+    recovered = list(all_regions)
+    for side in ("left", "right"):
+        regs = [r for r in all_regions if r["side"] == side]
+        if not regs:
+            continue
+        rx0 = float(np.percentile([r["x"] for r in regs], 10))
+        rx1 = float(np.percentile([r["x"] + r["w"] for r in regs], 90))
+        cx = (rx0 + rx1) / 2
+        col_w = max(rx1 - rx0, 0.01)
+        for it in all_items:
+            t = it["text"]
+            if it["side"] != side or t in ROLE_SET:
+                continue
+            if not (2 <= len(t) <= 5) or not re.search(r"[\u4e00-\u9fff]", t):
+                continue
+            xc = (it["x0"] + it["x1"]) / 2
+            if abs(xc - cx) > col_w * 0.6 or (it["x1"] - it["x0"]) > col_w * 1.6:
+                continue
+            role = _snap_role(t)
+            if role is None:
+                continue
+            recovered.append({"x": it["x0"], "y": it["y0"],
+                              "w": round(it["x1"] - it["x0"], 4),
+                              "h": round(it["y1"] - it["y0"], 4),
+                              "text": role, "side": side})
+    return recovered
+
+
 def detect_names_in_frame(ocr, frame, edge_ratio=0.30):
     """Run OCR on the frame edges, return role-name bounding boxes."""
     return _roles_from_items(ocr_items_in_frame(ocr, frame, edge_ratio=edge_ratio))
@@ -133,27 +213,32 @@ def analyze_name_regions_with_ocr(ocr, video_path):
 
     Returns (masks, unique_texts) tuple (role map omitted).
     """
-    masks, _role_map, texts = _analyze(ocr, video_path)
+    masks, _role_map, texts, _close_vision = _analyze(ocr, video_path)
     return masks, texts
 
 
 def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=8):
-    """Scan a range. Returns (regions, items, num_sampled).
+    """Scan a range. Returns (regions, items, num_sampled, unknown_frames).
 
     Accumulates raw OCR items (for the role map) from frames containing role
-    names, stopping after min_named_frames such frames.
+    names, stopping after min_named_frames such frames. unknown_frames counts
+    frames showing two or more 未知 labels (close-vision games); once three
+    such frames are seen with no role names at all, the scan stops early.
     """
     all_regions = []
     all_items = []
     found_any = False
     named = 0
     num_sampled = 0
+    unknown_frames = 0
     gen = sample_frames(video_path, start_sec=start_sec, end_sec=end_sec,
                         interval=interval)
     try:
         for sec, frame in gen:
             num_sampled += 1
             items = ocr_items_in_frame(ocr, frame)
+            if sum(1 for it in items if it["text"] == UNKNOWN_LABEL) >= 2:
+                unknown_frames += 1
             regions = _roles_from_items(items)
             if regions:
                 if not found_any:
@@ -165,9 +250,12 @@ def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=
                 if named >= min_named_frames:
                     print(f"  Collected {named} named frames by {sec}s")
                     break
+            elif unknown_frames >= 3 and named == 0:
+                print(f"  Close-vision labels in {unknown_frames} frames, no roles — stopping scan at {sec}s")
+                break
     finally:
         gen.close()
-    return all_regions, all_items, num_sampled
+    return all_regions, all_items, num_sampled, unknown_frames
 
 
 def _cluster_rows(regs, tol=0.05):
@@ -197,12 +285,44 @@ def _bands_from_centers(cs):
     return bands
 
 
-def build_role_map(all_items, all_regions):
-    """Map each player row to its role, number, name, and reveal y-band.
+def _infer_seats(rows, ocr_nums, side):
+    """Seat number for every row from vertical position, anchored on the
+    badges OCR did read.
 
-    Used by the viewer's role-reveal panel. The role string is only a menu
-    label (the revealed pixels are the source of truth), so OCR noise in it
-    is harmless.
+    Seats run top-to-bottom (1-6 left, 7-12 right) at a fixed pitch, so for
+    any anchored row the seat of row i is anchor_seat + round(dy / pitch).
+    Every anchored row votes for every row; the majority wins. With no
+    anchor on a side, fall back to the standard layout geometry.
+    """
+    n = len(rows)
+    ys = [r["yc"] for r in rows]
+    diffs = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0.05]
+    pitch = float(np.median(diffs)) if diffs else SEAT_ROW_SPACING
+    anchors = [(ys[i], Counter(v).most_common(1)[0][0])
+               for i, v in enumerate(ocr_nums) if v]
+
+    def positional():
+        seats = [SEAT_BASE[side] + int(round((y - SEAT_FIRST_ROW_Y) / pitch)) for y in ys]
+        return seats if len(set(seats)) == n else [SEAT_BASE[side] + i for i in range(n)]
+
+    if not anchors:
+        return positional()
+    seats = []
+    for i in range(n):
+        votes = Counter(a_seat + int(round((ys[i] - a_y) / pitch)) for a_y, a_seat in anchors)
+        seats.append(votes.most_common(1)[0][0])
+    if len(set(seats)) != n or min(seats) < 1 or max(seats) > 20:
+        return positional()
+    return seats
+
+
+def build_role_map(all_items, all_regions):
+    """Map each player row to its seat number, role, and reveal y-band.
+
+    Used by the viewer's role-reveal panel. Only the seat ID identifies a
+    player: names are not extracted (OCR of the stylized name tags was
+    unreliable). The role string is only a menu label — the viewer reveals
+    the real pixels — so OCR noise in it is harmless.
     """
     role_map = {}
     for side in ("left", "right"):
@@ -218,42 +338,31 @@ def build_role_map(all_items, all_regions):
         rx0 = float(np.percentile([r["x"] for r in regs], 10))
         rx1 = float(np.percentile([r["x"] + r["w"] for r in regs], 90))
 
+        # Seat badges OCR'd per row: 1-2 digit numbers outward of the role column
         nums = [[] for _ in rows]
-        names = [[] for _ in rows]
         for it in sit:
-            yc = (it["y0"] + it["y1"]) / 2
-            bi = next((i for i, (a, b) in enumerate(bands) if a <= yc < b), None)
-            if bi is None:
-                continue
             t = it["text"]
+            if not re.fullmatch(r"\d{1,2}", t):
+                continue
+            v = int(t)
+            if not 1 <= v <= 20:
+                continue
             xc = (it["x0"] + it["x1"]) / 2
-            # Numbers and names sit outward of the role column (toward the
-            # frame edge); notes sit inward (toward center)
             outward = xc < rx0 if side == "left" else xc > rx1
             if not outward:
                 continue
-            if re.fullmatch(r"\d{1,2}", t):
-                v = int(t)
-                if 1 <= v <= 12:
-                    nums[bi].append(v)
-            elif (t not in ROLE_SET and t.lower() not in NAME_STOPWORDS
-                  and not re.fullmatch(r"[\W\d_]+", t) and 1 <= len(t) <= 5):
-                has_cjk = 1 if re.search(r"[\u4e00-\u9fff]", t) else 0
-                # Prefer Chinese names, then those nearest the role row
-                # (drops top-corner overlays like "RTX"/"VSR"), then score
-                names[bi].append((has_cjk, -round(abs(yc - rows[bi]["yc"]), 4),
-                                  it["score"], t))
+            yc = (it["y0"] + it["y1"]) / 2
+            bi = next((i for i, (a, b) in enumerate(bands) if a <= yc < b), None)
+            if bi is not None:
+                nums[bi].append(v)
+        seats = _infer_seats(rows, nums, side)
 
         players = []
         for i, row in enumerate(rows):
-            number = Counter(nums[i]).most_common(1)[0][0] if nums[i] else None
-            name = max(names[i])[3] if names[i] else None
             y0, y1 = bands[i]
-            players.append({"number": number, "name": name, "role": row["role"],
+            players.append({"number": seats[i], "role": row["role"],
                             "y0": round(y0, 4), "y1": round(y1, 4)})
-        players.sort(key=lambda p: (p["number"] is None,
-                                    p["number"] if p["number"] is not None else 0,
-                                    p["y0"]))
+        players.sort(key=lambda p: p["number"])
         role_map[side] = players
     return role_map
 
@@ -295,33 +404,41 @@ def build_masks(all_regions):
 def _analyze(ocr, video_path):
     """Core analysis logic shared by public entry points.
 
-    Returns (masks, role_map, unique_texts).
+    Returns (masks, role_map, unique_texts, close_vision).
 
     Scans 1100s-1400s first. If both sides aren't found, extends the scan
     to 1400s-2000s with a coarser interval to find late-appearing names.
     """
     print("Sampling frames (1100s-1400s at 10s intervals)...")
-    all_regions, all_items, num_sampled = _scan_range(
+    all_regions, all_items, num_sampled, unknown_frames = _scan_range(
         ocr, video_path, 1100, 1400, interval=10)
     print(f"Processed {num_sampled} frames")
+
+    # Close-vision game: the broadcast shows 未知 instead of a role until it
+    # is revealed in-game, i.e. the audience is already blind. Masks and the
+    # night overlay are pointless there, so flag it and skip the expensive
+    # extended scans.
+    close_vision = unknown_frames >= 2
+    if close_vision:
+        print(f"  Close-vision game detected ({unknown_frames} frames show '{UNKNOWN_LABEL}')")
 
     sides_found = set(r["side"] for r in all_regions)
     missing_sides = {"left", "right"} - sides_found
 
-    if missing_sides and all_regions:
+    if missing_sides and all_regions and not close_vision:
         print(f"  Missing {', '.join(missing_sides)} side. "
               f"Extending scan (1400s-2000s at 30s intervals)...")
-        er, ei, es = _scan_range(
+        er, ei, es, _ = _scan_range(
             ocr, video_path, 1400, 2000, interval=30, min_named_frames=4)
         num_sampled += es
         all_regions.extend(r for r in er if r["side"] in missing_sides)
         all_items.extend(it for it in ei if it["side"] in missing_sides)
         print(f"  Extended scan: {es} more frames")
 
-    if not all_regions:
+    if not all_regions and not close_vision:
         print("  No names in primary range. Trying extended scan "
               "(1400s-2000s at 30s intervals)...")
-        all_regions, all_items, es = _scan_range(
+        all_regions, all_items, es, _ = _scan_range(
             ocr, video_path, 1400, 2000, interval=30, min_named_frames=4)
         num_sampled += es
         print(f"  Extended scan: {es} frames")
@@ -331,7 +448,13 @@ def _analyze(ocr, video_path):
         return [
             {"x": 0.05, "y": 0, "w": 0.10, "h": 1.0},
             {"x": 0.85, "y": 0, "w": 0.10, "h": 1.0},
-        ], {}, set()
+        ], {}, set(), close_vision
+
+    # Recover rows whose role label the OCR misread (械狼, 狼人学, 自神)
+    before = len(all_regions)
+    all_regions = _recover_misread_roles(all_regions, all_items)
+    if len(all_regions) > before:
+        print(f"  Recovered {len(all_regions) - before} misread role label(s)")
 
     unique_texts = set(r["text"] for r in all_regions)
     print(f"Detected texts: {', '.join(sorted(unique_texts))}")
@@ -343,9 +466,8 @@ def _analyze(ocr, video_path):
         print(f"  x={m['x']:.3f} y={m['y']:.3f} w={m['w']:.3f} h={m['h']:.3f}")
     for sd, players in role_map.items():
         print(f"  role_map[{sd}]: " + ", ".join(
-            f"{p['number'] if p['number'] is not None else '?'}={p['role']}"
-            for p in players))
-    return masks, role_map, unique_texts
+            f"{p['number']}={p['role']}" for p in players))
+    return masks, role_map, unique_texts, close_vision
 
 
 def _ensure_models():
@@ -431,11 +553,11 @@ def analyze_name_regions(video_path):
 
 
 def analyze_name_regions_full(video_path):
-    """Full name-detection result: {"name_masks": [...], "role_map": {...}}."""
+    """Full name-detection result: {name_masks, role_map, close_vision}."""
     print("Initializing PaddleOCR...")
     ocr = _init_ocr()
-    masks, role_map, _texts = _analyze(ocr, video_path)
-    return {"name_masks": masks, "role_map": role_map}
+    masks, role_map, _texts, close_vision = _analyze(ocr, video_path)
+    return {"name_masks": masks, "role_map": role_map, "close_vision": close_vision}
 
 
 if __name__ == "__main__":

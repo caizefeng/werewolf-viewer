@@ -7,6 +7,7 @@
 // player names/avatars too); "role" covers only the role-name boxes
 const MASK_MODE_KEY = "werewolf.maskMode";
 const VOLUME_KEY = "werewolf.volume"; // {volume, muted} as last set by the user
+const REVEAL_MODE_KEY = "werewolf.revealMode"; // "player" | "role"
 
 export class WerewolfPlayer {
   constructor(elements) {
@@ -39,6 +40,8 @@ export class WerewolfPlayer {
     this.videoId = null;
     this.roleMap = {};
     this.revealed = new Set(); // reveal keys the user has un-blinded
+    this.closeVision = false; // broadcast hides roles itself (未知 labels)
+    this.revealMode = this._loadRevealMode();
     this._defaultNameMasks = null;
     this._defaultNightPhases = null;
     this.masksEnabled = true;
@@ -136,8 +139,17 @@ export class WerewolfPlayer {
         this.metadata.original_night_phases ?? this.metadata.night_phases));
       this.statusEl.textContent = `Loaded: ${this.metadata.night_phases.length} night phases, ${this.metadata.name_masks.length} mask regions`;
       this.roleMap = this.metadata.role_map || {};
+      this.closeVision = !!this.metadata.close_vision;
+      // Close-vision games (the broadcast hides roles itself) start with
+      // masks off; every other video starts masked (spoiler-safe default)
+      this.masksEnabled = !this.closeVision;
+      this._updateMaskToggleBtn();
+      this.isNight = false;
+      this._updateNightState();
+      if (this.closeVision) this.statusEl.textContent += " \u00b7 close-vision game: masks off";
       this._loadReveal();
       this.createNameMasks();
+      this._updateMaskVisibility(this.video.currentTime);
       this._renderNightMarkers();
       this._renderRolePanel();
       return true;
@@ -145,6 +157,9 @@ export class WerewolfPlayer {
       // Clear stale UI from the previously loaded video
       this.roleMap = {};
       this.revealed = new Set();
+      this.closeVision = false;
+      this.masksEnabled = true;
+      this._updateMaskToggleBtn();
       this.createNameMasks();
       this._renderNightMarkers();
       this._renderNightJumpButtons();
@@ -159,6 +174,24 @@ export class WerewolfPlayer {
 
   loadVideo(url) {
     this.video.src = url;
+  }
+
+  // Drop the loaded video's state (used when it is deleted)
+  clear() {
+    this.metadata = null;
+    this.videoId = null;
+    this.roleMap = {};
+    this.revealed = new Set();
+    this.closeVision = false;
+    this.masksEnabled = true;
+    this._updateMaskToggleBtn();
+    this.createNameMasks();
+    this._renderNightMarkers();
+    this._renderNightJumpButtons();
+    this._renderRolePanel();
+    this.isNight = false;
+    this._updateNightState();
+    this.statusEl.textContent = "";
   }
 
   // Persist current night phases + masks back to the server's metadata.json
@@ -408,8 +441,9 @@ export class WerewolfPlayer {
     return keys;
   }
 
-  _toggleReveal(key, side, p) {
+  _toggleReveal(key, side, p, label) {
     const turningOn = !this.revealed.has(key);
+    const who = label || `#${p.number}`;
     if (this._isWolf(p.role)) {
       // Reveal/hide the entire wolf team together
       const keys = this._wolfKeys();
@@ -418,28 +452,87 @@ export class WerewolfPlayer {
         else this.revealed.delete(k);
       }
       this.statusEl.textContent = turningOn
-        ? `Revealed the wolf team (${keys.length})`
+        ? `Revealed ${who} and the rest of the wolf team (${keys.length})`
         : "Hid the wolf team";
     } else {
       if (turningOn) this.revealed.add(key);
       else this.revealed.delete(key);
-      const who = p.number != null ? `#${p.number}` : (p.name || "player");
-      this.statusEl.textContent = `${turningOn ? "Revealed" : "Hid"} ${who} (${p.role})`;
+      this.statusEl.textContent = `${turningOn ? "Revealed" : "Hid"} ${who}`;
     }
     this._applyReveal();
+  }
+
+  // ── Reveal modes: by player (seat) or by role ──
+
+  _loadRevealMode() {
+    try {
+      const v = localStorage.getItem(REVEAL_MODE_KEY);
+      if (v === "player" || v === "role") return v;
+    } catch {}
+    return "role";
+  }
+
+  setRevealMode(mode) {
+    this.revealMode = mode;
+    try { localStorage.setItem(REVEAL_MODE_KEY, mode); } catch {}
+    this._renderRolePanel();
+  }
+
+  // Role mode lists "平民 1..N" etc. without any seat numbers. The index ->
+  // seat assignment is a random permutation (so the menu order leaks
+  // nothing), generated once per video and remembered so the labels stay
+  // stable across reloads.
+  _roleEntries() {
+    const groups = new Map(); // role -> [{side, p}]
+    for (const side of ["left", "right"]) {
+      for (const p of (this.roleMap[side] || [])) {
+        if (!groups.has(p.role)) groups.set(p.role, []);
+        groups.get(p.role).push({ side, p });
+      }
+    }
+    const storeKey = `werewolf.roleorder.${this.videoId}`;
+    let stored = {};
+    try { stored = JSON.parse(localStorage.getItem(storeKey)) || {}; } catch {}
+    let changed = false;
+    const entries = [];
+    const roles = [...groups.keys()].sort((a, b) =>
+      (Number(this._isWolf(b)) - Number(this._isWolf(a))) ||
+      (groups.get(b).length - groups.get(a).length) ||
+      a.localeCompare(b, "zh"));
+    for (const role of roles) {
+      const members = groups.get(role);
+      const keys = members.map((m) => this._revealKey(m.side, m.p));
+      let order = Array.isArray(stored[role]) ? stored[role].filter((k) => keys.includes(k)) : [];
+      if (order.length !== keys.length || new Set(order).size !== keys.length) {
+        order = keys.slice();
+        for (let i = order.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [order[i], order[j]] = [order[j], order[i]];
+        }
+        stored[role] = order;
+        changed = true;
+      }
+      order.forEach((key, i) => {
+        const m = members.find((x) => this._revealKey(x.side, x.p) === key);
+        entries.push({
+          role, key, side: m.side, p: m.p,
+          label: members.length > 1 ? `${role} ${i + 1}` : role,
+        });
+      });
+    }
+    if (changed && this.videoId) {
+      try { localStorage.setItem(storeKey, JSON.stringify(stored)); } catch {}
+    }
+    return entries;
   }
 
   _renderRolePanel() {
     const panel = this.rolePanel;
     if (!panel) return;
+    const scrollTop = panel.scrollTop;
     panel.innerHTML = "";
     panel.classList.toggle("hidden", !this.metadata);
     if (!this.metadata) return;
-
-    const rows = [];
-    for (const side of ["left", "right"]) {
-      for (const p of (this.roleMap[side] || [])) rows.push({ side, p });
-    }
 
     const header = document.createElement("div");
     header.className = "rp-header";
@@ -447,66 +540,114 @@ export class WerewolfPlayer {
     title.className = "rp-title";
     title.textContent = "Roles";
     header.appendChild(title);
-    if (rows.length) {
-      const grp = document.createElement("div");
-      grp.style.display = "flex";
-      grp.style.gap = "4px";
-      const blindBtn = document.createElement("button");
-      blindBtn.className = "rp-btn";
-      blindBtn.textContent = "Blind";
-      blindBtn.title = "Hide every role (default)";
-      blindBtn.addEventListener("click", () => this._setAllRevealed(false));
-      const allBtn = document.createElement("button");
-      allBtn.className = "rp-btn";
-      allBtn.textContent = "All";
-      allBtn.title = "Reveal every role";
-      allBtn.addEventListener("click", () => this._setAllRevealed(true));
-      grp.appendChild(blindBtn);
-      grp.appendChild(allBtn);
-      header.appendChild(grp);
-    }
     panel.appendChild(header);
 
-    if (!rows.length) {
-      const empty = document.createElement("div");
-      empty.className = "rp-empty";
-      empty.textContent = "No role map for this game. Click \u21bb Re-analyze in the library to map roles.";
-      panel.appendChild(empty);
+    const empty = (text) => {
+      const el = document.createElement("div");
+      el.className = "rp-empty";
+      el.textContent = text;
+      panel.appendChild(el);
+    };
+
+    if (this.closeVision) {
+      empty("Close-vision game: the broadcast hides roles itself (\u672a\u77e5 until revealed in-game), so there is nothing to reveal here.");
       return;
     }
 
-    rows.sort((a, b) =>
-      (a.p.number ?? 99) - (b.p.number ?? 99) ||
-      a.side.localeCompare(b.side) || a.p.y0 - b.p.y0);
-
-    for (const { side, p } of rows) {
-      const key = this._revealKey(side, p);
-      const on = this.revealed.has(key);
-      const row = document.createElement("div");
-      row.className = "rp-row" + (on ? " revealed" : "");
-      const num = document.createElement("span");
-      num.className = "rp-num";
-      num.textContent = p.number != null ? p.number : (side === "left" ? "L" : "R");
-      const name = document.createElement("span");
-      name.className = "rp-name";
-      name.textContent = p.name || "\u2014";
-      const role = document.createElement("span");
-      role.className = "rp-role";
-      role.textContent = on ? p.role : "\u2022\u2022\u2022";
-      row.appendChild(num);
-      row.appendChild(name);
-      if (this._isWolf(p.role)) {
-        row.classList.add("rp-wolf");
-        row.title = "Wolf team — reveals/hides all wolves together";
-        const paw = document.createElement("span");
-        paw.className = "rp-paw";
-        paw.textContent = "\ud83d\udc3a";
-        row.appendChild(paw);
-      }
-      row.appendChild(role);
-      row.addEventListener("click", () => this._toggleReveal(key, side, p));
-      panel.appendChild(row);
+    const players = [];
+    for (const side of ["left", "right"]) {
+      for (const p of (this.roleMap[side] || [])) players.push({ side, p });
     }
+    if (!players.length) {
+      empty("No role map for this game. Click \u21bb Re-analyze in the library to map roles.");
+      return;
+    }
+
+    // Blind / All
+    const grp = document.createElement("div");
+    grp.className = "rp-actions";
+    const blindBtn = document.createElement("button");
+    blindBtn.className = "rp-btn";
+    blindBtn.textContent = "Blind";
+    blindBtn.title = "Hide every role (default)";
+    blindBtn.addEventListener("click", () => this._setAllRevealed(false));
+    const allBtn = document.createElement("button");
+    allBtn.className = "rp-btn";
+    allBtn.textContent = "All";
+    allBtn.title = "Reveal every role";
+    allBtn.addEventListener("click", () => this._setAllRevealed(true));
+    grp.appendChild(blindBtn);
+    grp.appendChild(allBtn);
+    header.appendChild(grp);
+
+    // Mode switch
+    const modes = document.createElement("div");
+    modes.className = "rp-modes";
+    for (const [mode, text, tip] of [
+      ["role", "By role", "Pick a role to play as. Seats are not shown; clones (\u5e73\u6c11 1, 2, \u2026) are shuffled."],
+      ["player", "By seat", "Pick a seat number to reveal that player's role."],
+    ]) {
+      const b = document.createElement("button");
+      b.className = "rp-mode-btn" + (this.revealMode === mode ? " active" : "");
+      b.textContent = text;
+      b.title = tip;
+      b.addEventListener("click", () => this.setRevealMode(mode));
+      modes.appendChild(b);
+    }
+    panel.appendChild(modes);
+
+    const addPaw = (row) => {
+      row.classList.add("rp-wolf");
+      row.title = "Wolf team \u2014 reveals/hides all wolves together";
+      const paw = document.createElement("span");
+      paw.className = "rp-paw";
+      paw.textContent = "\ud83d\udc3a";
+      row.appendChild(paw);
+    };
+
+    if (this.revealMode === "player") {
+      players.sort((a, b) => a.p.number - b.p.number);
+      for (const { side, p } of players) {
+        const key = this._revealKey(side, p);
+        const on = this.revealed.has(key);
+        const row = document.createElement("div");
+        row.className = "rp-row" + (on ? " revealed" : "");
+        const num = document.createElement("span");
+        num.className = "rp-num";
+        num.textContent = p.number;
+        const spacer = document.createElement("span");
+        spacer.className = "rp-name";
+        spacer.textContent = `Seat ${p.number}`;
+        const role = document.createElement("span");
+        role.className = "rp-role";
+        role.textContent = on ? p.role : "\u2022\u2022\u2022";
+        row.appendChild(num);
+        row.appendChild(spacer);
+        if (this._isWolf(p.role)) addPaw(row);
+        row.appendChild(role);
+        row.addEventListener("click", () => this._toggleReveal(key, side, p));
+        panel.appendChild(row);
+      }
+    } else {
+      for (const e of this._roleEntries()) {
+        const on = this.revealed.has(e.key);
+        const row = document.createElement("div");
+        row.className = "rp-row" + (on ? " revealed" : "");
+        const name = document.createElement("span");
+        name.className = "rp-name rp-rolename";
+        name.textContent = e.label;
+        const state = document.createElement("span");
+        state.className = "rp-role";
+        // Only once revealed does the row say which seat that was
+        state.textContent = on ? `seat ${e.p.number}` : "\u2022\u2022\u2022";
+        row.appendChild(name);
+        if (this._isWolf(e.role)) addPaw(row);
+        row.appendChild(state);
+        row.addEventListener("click", () => this._toggleReveal(e.key, e.side, e.p, e.label));
+        panel.appendChild(row);
+      }
+    }
+    panel.scrollTop = scrollTop;
   }
 
   _bindMaskResize(el, handle, mask, handleSide) {
@@ -688,32 +829,37 @@ export class WerewolfPlayer {
   }
 
   _updateNightState() {
+    // The indicator reflects the phase itself; only the blackout/mute
+    // depend on masks being enabled
+    this.phaseIndicator.textContent = this.isNight ? "🌙 Night" : "☀️ Day";
     if (this.isNight && this.masksEnabled) {
       this.nightOverlay.classList.remove("hidden");
       this.savedVolume = this.video.volume;
       this.video.muted = true;
-      this.phaseIndicator.textContent = "🌙 Night";
     } else {
       this.nightOverlay.classList.add("hidden");
       if (this.video.muted && this.masksEnabled && !this.userMuted) {
         this.video.muted = false;
         this.video.volume = this.savedVolume;
       }
-      this.phaseIndicator.textContent = "☀️ Day";
     }
   }
 
   _updateMaskVisibility(t) {
     const masks = this.nameMasksContainer.querySelectorAll(".name-mask");
-    if (!this.masksEnabled || !this.metadata?.night_phases?.length) {
+    if (!this.masksEnabled) {
       masks.forEach((el) => el.classList.add("hidden"));
       return;
     }
-
-    // Names only appear after the first night ends, and not during night phases
-    const firstNightEnd = this.metadata.night_phases[0].end;
-    const shouldShow = t >= firstNightEnd && !this.isNight;
-
+    // Role names appear in the sidebar once the first night ends, and the
+    // night overlay covers everything during nights. With no detected
+    // nights at all (detection failed, or none yet) stay masked throughout.
+    const phases = this.metadata?.night_phases || [];
+    let shouldShow = true;
+    if (phases.length) {
+      const first = phases.reduce((a, b) => (a.start <= b.start ? a : b));
+      shouldShow = t >= first.end && !this.isNight;
+    }
     masks.forEach((el) => el.classList.toggle("hidden", !shouldShow));
   }
 
@@ -908,8 +1054,7 @@ export class WerewolfPlayer {
   toggleMasks() {
     this.masksEnabled = !this.masksEnabled;
 
-    this.toggleBtn.textContent = this.masksEnabled ? "Masks: On" : "Masks: Off";
-    this.toggleBtn.classList.toggle("active", this.masksEnabled);
+    this._updateMaskToggleBtn();
 
     if (this.masksEnabled && this.isNight) {
       this.nightOverlay.classList.remove("hidden");
@@ -922,6 +1067,16 @@ export class WerewolfPlayer {
 
     // Re-evaluate mask visibility based on current time
     this._updateMaskVisibility(this.video.currentTime);
+  }
+
+  _updateMaskToggleBtn() {
+    const on = this.masksEnabled;
+    this.toggleBtn.textContent = on ? "Masks: On"
+      : (this.closeVision ? "Masks: Off (close-vision)" : "Masks: Off");
+    this.toggleBtn.classList.toggle("active", on);
+    this.toggleBtn.title = this.closeVision
+      ? "Close-vision game: the broadcast hides roles itself, so masks are off. Click (or M) to force them on."
+      : "Shortcut: M";
   }
 
   // ── Mute ──

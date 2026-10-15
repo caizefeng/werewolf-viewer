@@ -175,14 +175,31 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   the stage. The director types a running opinion next to each role that gives it away as much as
   the name. Fixed extension, not measured (measuring tripped over centered banners: title, config
   line, news ticker)
-- **Role map** (build_role_map): from raw OCR items it builds role_map = {left:[...], right:[...]},
-  each player {number, name, role, y0, y1}. Rows cluster role boxes by y (_cluster_rows); reveal
-  bands are midpoints between rows (_bands_from_centers); number/name are the outward (edge-side)
-  items per row (number = 1-2 digits 1-12; name prefers Chinese then role-proximity, dropping corner
-  overlays like RTX). The role string is only a menu label (the viewer reveals real pixels)
+- **Role map** (build_role_map): role_map = {left:[...], right:[...]}, each player
+  {number, role, y0, y1} -- seat ID only, NO names (OCR of the stylized name tags was unreliable;
+  the user wants seat numbers only). Rows cluster role boxes by y (_cluster_rows); reveal bands
+  are midpoints between rows (_bands_from_centers). The role string is only a menu label (the
+  viewer reveals real pixels)
+- **Seat numbers are inferred from row position** (_infer_seats): seats run 1-6 top-to-bottom on
+  the left and 7-12 on the right at a fixed pitch, so every anchored row (a seat badge OCR did
+  read, outward of the role column) votes seat = anchor + round(dy / pitch) for every row; majority
+  wins, so one misread badge can't shift the others and a row whose badge wasn't read still gets
+  its seat. No anchor on a side -> standard layout geometry (SEAT_BASE / SEAT_ROW_SPACING /
+  SEAT_FIRST_ROW_Y)
+- **Misread role labels are recovered** (_recover_misread_roles + _snap_role): any short CJK box
+  centered in the role column that isn't an exact role is a misread label (notes sit inward,
+  badges outward), snapped by containment or edit distance 1 (械狼->机械狼, 狼人学->狼人,
+  自神->白神). 未知 never snaps. Without this a misread row vanished from the role map
+- **Close-vision games**: the broadcast shows 未知 instead of a role until it is revealed in-game,
+  so the audience is already blind. _scan_range counts frames with >=2 未知 labels; >=2 such
+  frames -> close_vision=True in metadata.json (extended scans skipped; the scan also stops
+  early after 3 such frames with no roles). The viewer then starts with masks/overlay OFF
+  (toggle still works as an override), badges the video in the library, and the role panel
+  shows an explanation instead of rows. Titles don't mark these games; detection is purely from
+  the sidebar labels and is unit-tested but not yet confirmed on a real close-vision video
 - Raw OCR goes through ocr_items_in_frame (edge_ratio 0.30) -> _roles_from_items;
   detect_names_in_frame is a thin wrapper. analyze_name_regions_full() returns {name_masks,
-  role_map} (what analyze.py writes); analyze_name_regions() still returns masks only
+  role_map, close_vision} (what analyze.py writes); analyze_name_regions() still returns masks only
 
 ### Pipeline Parallelism (analyze.py)
 - Default: runs night + name detection in **separate processes** (subprocess for name detection)
@@ -200,12 +217,21 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Night overlay: black screen during night phases
 - Name masks: opaque overlay, visible only after first night ends, hidden during nights
 - Masks are resizable via drag handles on edges, deletable via × button on hover
-- **Role reveal panel** (right-edge slide-out, hover the ROLES tab): default all-blind, lists every
-  player (number, name, role hidden as dots). Clicking a player reveals their role on the video (the
-  mask opens a horizontal band over that row; _fillSegments renders the opaque fill in segments with
-  gaps at revealed rows). Clicking a WOLF reveals/hides the whole wolf team (any role containing the
-  wolf character), mimicking playing as a wolf who knows the pack. Blind/All buttons reveal none/all.
-  The revealed set persists per video in localStorage. Needs a role map (re-analyze older videos)
+- **Role reveal panel** (right-edge slide-out, hover the ROLES tab): default all-blind. Revealing
+  opens the mask over that player's row so the real role shows through (_fillSegments renders the
+  opaque fill in segments with gaps at revealed rows). Two modes (button pair, remembered per
+  browser, default By role):
+  - **By seat**: rows are seat numbers 1-12; click to reveal that seat's role
+  - **By role**: rows are the roles in play, with NO seat shown; clones are indexed (平民 1..4) and
+    the index->seat assignment is a random permutation generated once per video and stored in
+    localStorage (werewolf.roleorder.<id>) so labels stay stable but leak nothing. Pick one to
+    'blend in' as that role; once revealed the row shows which seat it was
+  Clicking a WOLF (any role containing 狼) reveals/hides the whole wolf team in either mode,
+  mimicking playing as a wolf who knows the pack. Blind/All buttons; the revealed set persists per
+  video. Needs a role map (re-analyze older videos). Close-vision games show an explanation only
+- Masks default ON for every loaded video (spoiler-safe), OFF for close-vision games; the toggle
+  is a per-video override. With no detected night phases masks stay on throughout (a detection
+  failure must not leak)
 - **Mute button** beside the volume slider; volume/mute persist per browser
 - **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
   metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
@@ -235,7 +261,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s, N=next night start, Shift+N=previous
 
 ## API Endpoints (vite.config.js middleware)
-- `GET /api/videos` - list videos with metadata.json
+- `GET /api/videos` - list videos with metadata.json (`closeVision` flag included for the library badge)
 - `GET /api/downloaded` - list all video dirs with hasVideo/hasMetadata flags
 - `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}). Merges two
   sources, deduped by id, both filtered by all query keywords: (1) the 200 most recent
@@ -258,6 +284,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - POST endpoints reject cross-origin requests (Origin header vs Host)
 - Malformed URLs (bad percent-encoding) return 400 instead of crashing the middleware
 - All `spawn()` calls have `error` handlers (missing binaries can't crash the server)
+- Request bodies are capped at 1 MB (413); the server is LAN-exposed and bodies are buffered in memory
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).

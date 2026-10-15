@@ -116,6 +116,9 @@ def run_analysis(video_path, sequential=False, num_workers=0):
         "night_phases": night_phases,
         "name_masks": name_result["name_masks"],
         "role_map": name_result.get("role_map", {}),
+        # True when the broadcast itself hides roles (未知 labels): the
+        # viewer turns masks/overlay off and disables role reveal
+        "close_vision": bool(name_result.get("close_vision", False)),
     }
 
     metadata_path = os.path.join(video_dir, "metadata.json")
@@ -126,6 +129,8 @@ def run_analysis(video_path, sequential=False, num_workers=0):
     print(f"Analysis complete!")
     print(f"  Night phases found: {len(night_phases)}")
     print(f"  Name mask regions: {len(name_result['name_masks'])}")
+    if name_result.get("close_vision"):
+        print("  Close-vision game: yes (masks/role reveal disabled in viewer)")
     print(f"  Metadata saved to: {metadata_path}")
     print("=" * 60)
 

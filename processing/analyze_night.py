@@ -351,7 +351,7 @@ def refine_boundaries(video_path, phases, threshold=RED_THRESH):
         # on, which pushes the cluster start one interval late; the real
         # red-on is then just before the (non-red) previous grid sample.
         on = float(s)
-        for t, r in _scan_window(cap, fps, s - 2 * SCAN_INTERVAL + REFINE_STEP, s):
+        for t, r in _scan_window(cap, fps, max(0.0, s - 2 * SCAN_INTERVAL + REFINE_STEP), s):
             if r >= threshold:
                 on = t
                 break

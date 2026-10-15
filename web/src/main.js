@@ -81,6 +81,15 @@ async function loadVideoList() {
       });
 
       li.appendChild(titleSpan);
+      if (v.closeVision) {
+        // The broadcast hides roles itself: masks/reveal are off for this one
+        li.classList.add("close-vision");
+        const badge = document.createElement("span");
+        badge.className = "video-badge";
+        badge.textContent = "close-vision";
+        badge.title = "Close-vision game: roles are hidden by the broadcast itself; masks and role reveal are off";
+        li.appendChild(badge);
+      }
       li.appendChild(reBtn);
       li.appendChild(delBtn);
       li.addEventListener("click", () => switchVideo(v.id));
@@ -166,6 +175,7 @@ async function doSearch() {
       body: JSON.stringify({ query }),
     });
     const results = await res.json();
+    if (!Array.isArray(results)) throw new Error(results?.error || `HTTP ${res.status}`);
     await refreshDownloadedState();
     renderSearchResults(results);
   } catch (err) {
@@ -361,11 +371,11 @@ function stopElapsedTicker() {
   }
 }
 
-function startJobPolling(videoId) {
+function startJobPolling(videoId, initialPhase = "downloading") {
   if (jobPollTimer) clearInterval(jobPollTimer);
-  lastPhase = "downloading";
+  lastPhase = initialPhase;
   activeJobVideoId = videoId;
-  activeStepName = "download";
+  activeStepName = initialPhase === "processing" ? "analysis" : "download";
 
   startElapsedTicker();
 
@@ -446,7 +456,7 @@ async function reanalyzeVideo(videoId) {
     }
     document.getElementById("status").textContent = "Re-analyzing (night + name detection)…";
     phaseStartTime = Date.now();
-    startJobPolling(videoId);
+    startJobPolling(videoId, "processing");
   } catch (err) {
     alert(`Re-analyze failed: ${err.message}`);
   }
@@ -466,11 +476,13 @@ async function deleteVideo(videoId) {
       // If currently playing this video, clear player
       if (currentVideoId === videoId) {
         currentVideoId = null;
-        player.videoId = null;
         const video = document.getElementById("video");
         video.pause();
         video.removeAttribute("src");
         video.load();
+        player.clear();
+        document.getElementById("video-title").textContent = "";
+        document.title = "Werewolf Viewer";
       }
       await refreshDownloadedState();
       loadVideoList();
@@ -513,8 +525,8 @@ async function init() {
     const status = await res.json();
     if (status.active) {
       phaseStartTime = status.phaseStartedAt || Date.now();
-      lastPhase = status.phase === "processing" ? "processing" : "downloading";
-      startJobPolling(status.videoId);
+      startJobPolling(status.videoId, status.phase === "processing" ? "processing" : "downloading");
+      if (status.kind === "analyze") document.getElementById("status").textContent = "Re-analyzing (night + name detection)…";
     }
   } catch {}
 }

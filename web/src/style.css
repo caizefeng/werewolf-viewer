@@ -1313,3 +1313,60 @@ header h1::after {
   line-height: 1.4;
   padding: 4px 2px;
 }
+
+/* Role panel: actions, mode switch, role-mode rows */
+.rp-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.rp-modes {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0 6px;
+}
+
+.rp-mode-btn {
+  flex: 1;
+  font-size: 0.62rem;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-family: inherit;
+}
+
+.rp-mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.rp-mode-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent-medium);
+  color: var(--accent);
+}
+
+.rp-rolename {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+/* Library: close-vision games */
+#video-list li.close-vision {
+  color: var(--text-muted);
+}
+
+.video-badge {
+  flex-shrink: 0;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(217, 173, 66, 0.12);
+  border: 1px solid rgba(217, 173, 66, 0.35);
+  color: var(--dawn-gold);
+}

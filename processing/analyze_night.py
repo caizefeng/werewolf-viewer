@@ -230,12 +230,22 @@ GAP_RED_THRESH = 1.3  # R/G ratio threshold for "elevated" (close-up shots durin
 GAP_ELEVATED_FRACTION = 0.6  # fraction of gap samples that must be elevated to merge
 GAP_MIN_FLOOR = 1.05  # minimum R/G in gap — below this means genuine daytime (blocks merge)
 MAX_MERGE_GAP = 100   # max gap duration (seconds) for ratio-based merging
+# Max gap (seconds) for camera-cut merging. The cut rule had no bound and
+# S23's cut-heavy editing chained a night to stray red flashes 45 minutes
+# later (a flash preceded by a cut, after a night that ended on a cut),
+# producing 50-80 minute "nights". Longer in-night gaps are the evidence
+# pass's job.
+MAX_CUT_MERGE_GAP = 180
 # Max gap (seconds) that may be bridged on day-evidence grounds: two red
 # bursts with no sidebar sighting between them are the same night. Newer
 # seasons (S23) cut away from the red table for over a minute at a time
 # (wolf close-ups, the night graphic), which fragments a night into bursts
-# that neither the camera-cut nor the ratio rule can reconnect.
-MAX_EVIDENCE_GAP = 300
+# that neither the camera-cut nor the ratio rule can reconnect. The longest
+# genuine in-night gap seen across four S23 games is 76s; the pre-game
+# red-light segment (cards dealt) sits 186-256s before the first night and
+# must not be joined (before the first night there is no sidebar at all,
+# so its absence is no evidence there), hence 120.
+MAX_EVIDENCE_GAP = 120
 # A red burst must be at least this long (seconds) to take part in
 # evidence-based merging. Shorter flashes (a red costume in a close-up
 # hitting the corner ROI for one sample) must neither extend a night nor
@@ -277,13 +287,15 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
         entry_idx = np.searchsorted(timestamps, cs, side='left')
         entry_diff = _max_diff_in_window(diffs, entry_idx)
 
+        gap_duration = cs - prev_end
+
         # Both transitions are camera cuts → gap is close-ups during night
-        if exit_diff >= cut_thresh and entry_diff >= cut_thresh:
+        if (exit_diff >= cut_thresh and entry_diff >= cut_thresh
+                and gap_duration <= MAX_CUT_MERGE_GAP):
             merged[-1] = (merged[-1][0], ce)
             continue
 
         # Gap with elevated R/G ratios → close-up shots during night
-        gap_duration = cs - prev_end
         if gap_duration <= MAX_MERGE_GAP and exit_idx < entry_idx:
             gap_ratios = ratios[exit_idx:entry_idx]
             if len(gap_ratios) > 0:
@@ -298,10 +310,18 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
     return merged
 
 
-def merge_by_day_evidence(phases, gap_is_night, min_fragment=MIN_EVIDENCE_FRAGMENT):
+def merge_by_day_evidence(phases, gap_is_night, timestamps, diffs,
+                          cut_thresh=CUT_THRESH, min_fragment=MIN_EVIDENCE_FRAGMENT):
     """Second merge pass: join consecutive substantial phases whose gap (at
-    most MAX_EVIDENCE_GAP) contains no day evidence, i.e. the sidebar was
-    never seen between them.
+    most MAX_EVIDENCE_GAP) was created by the camera leaving the table and
+    contains no day evidence, i.e. the sidebar was never seen between them.
+
+    "The camera left" = at least one gap boundary is a camera cut (frame
+    diff >= cut_thresh at the exact boundary sample). A genuine short day
+    between two nights (S21/S22 games often have a self-destruct followed
+    by an immediate second night ~30s later) shows the light going off and
+    on while the camera stays on the table: gradual boundaries, so it is
+    never joined even though no sidebar appears in those 30s.
 
     Only phases at least min_fragment long take part: a stray one-sample
     flash neither extends a night nor interrupts a chain of real bursts
@@ -318,7 +338,11 @@ def merge_by_day_evidence(phases, gap_is_night, min_fragment=MIN_EVIDENCE_FRAGME
         if last is not None:
             ps, pe = out[last]
             gap = s - pe
-            if 0 < gap <= MAX_EVIDENCE_GAP and gap_is_night(pe, s):
+            exit_idx = np.searchsorted(timestamps, pe, side='right')
+            entry_idx = np.searchsorted(timestamps, s, side='left')
+            cut_at_boundary = (_max_diff_in_window(diffs, exit_idx, 0) >= cut_thresh
+                               or _max_diff_in_window(diffs, entry_idx, 0) >= cut_thresh)
+            if 0 < gap <= MAX_EVIDENCE_GAP and cut_at_boundary and gap_is_night(pe, s):
                 out[last] = (ps, e)
                 # tiny phases that now fall inside the merged span are absorbed
                 out = out[:last + 1] + [q for q in out[last + 1:] if not (ps <= q[0] and q[1] <= e)]
@@ -445,7 +469,7 @@ def analyze_night_phases(video_path, num_workers=0):
     print(f"  Found {len(clusters)} red cluster(s)")
 
     phases = merge_clusters(clusters, timestamps, ratios, diffs)
-    phases = merge_by_day_evidence(phases, _make_gap_checker(video_path, clusters))
+    phases = merge_by_day_evidence(phases, _make_gap_checker(video_path, clusters), timestamps, diffs)
 
     # Filter phases bounded by camera cuts on both sides (not real transitions).
     # A phase assembled from several red bursts is a real night whose outer

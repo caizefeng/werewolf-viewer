@@ -138,6 +138,19 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   - Boundary diffs handled correctly: each thread reads one extra frame before its segment
   - Revert to sequential: `--workers 1`
 - Computes R/G color ratio from bottom-left and bottom-right corners
+  - **Why this feature (feature study 2026-10-15, 520 night + 520 day frames from the 13 GT videos)**:
+    per frame, corner-max R/G is the best cheap color feature (day frames are tightly ~1.1, p90 <= 1.4
+    in every season, so the 2.5 threshold has a wide margin and daytime "red" is < 1%); corner-min,
+    lower-half red-pixel fraction, whole-frame red dominance and a red-hue mask were all worse on
+    both axes. Its real limit is COVERAGE, not correctness: 25-30% of true-night frames in every
+    season are not red at all because the camera is on close-ups or a graphic. That is why nights are
+    assembled temporally (clusters + camera-cut structure) and, since S23, bridged with non-lighting
+    evidence (sidebar absence). A night the camera never shows as a red table is still undetectable
+  - Other cues checked and rejected as primary signals: the "天黑请闭眼" start banner exists only in
+    S23 broadcasts (present at both S23 night starts tested, absent at all six S21/S22 starts) and
+    lasts ~6s; the top "第X天" day counter is intermittent and one operator skipped a number (E24
+    labelled day 2 as 第三天); Apple Vision cannot read the vertical sidebar labels. Sidebar
+    absence is the only night cue found to hold across S21-S23
   - ROI: upper half of bottom 12% strip (h*0.88 to h*0.93), avoids UI overlays
   - Uses max(left, right) R/G ratio per frame
   - R/G >= 2.5 = red ambient light (night), ~1.0 = normal (day)
@@ -150,20 +163,25 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding
   sequentially (`_scan_window`), so buffers apply to the actual light transition. Output times are
   floats (2 decimals). Buffers: `ENTRY_BUFFER=2.0` before red-on, `EXIT_BUFFER=1.0` after red-off
-- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps.
+- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, and the gap is at most MAX_CUT_MERGE_GAP=180s (the cut rule used to be unbounded; S23's cut-heavy editing chained a night to stray red flashes up to 45 minutes later, yielding 50-80 minute "nights" on S23E25), OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps.
 - **merge_by_day_evidence** (second pass, S23+): newer seasons cut away from the red table for
   over a minute at a time during a night (the wolves' masked close-ups, the night graphic), so a
   night arrives as 14-60s red bursts that neither rule above reconnects, and each burst then dies
   to the 35s minimum (S23E24G1's first night was missed entirely; its second night was split).
   Day evidence = the player sidebar being on screen: it is visible throughout the day and never
-  inside a night. Two substantial bursts (>= MIN_EVIDENCE_FRAGMENT=6s) at most MAX_EVIDENCE_GAP=300s
-  apart are joined if no sidebar sighting lies between them. Sightings come from
+  inside a night. Two substantial bursts (>= MIN_EVIDENCE_FRAGMENT=6s) at most MAX_EVIDENCE_GAP=120s (longest real in-night gap seen: 76s; the pre-game red-light card-dealing segment sits 186-256s before the first night and has no sidebar after it either)
+  apart are joined if (a) at least one gap boundary is a camera cut (frame diff >= CUT_THRESH at the
+  exact boundary sample: the camera LEFT the table) and (b) no sidebar sighting lies between them.
+  (a) is what keeps S21/S22 intact: those games often have a self-destruct followed by an immediate
+  second night ~30s later with no sidebar in between, but there the light goes off and on while the
+  camera stays on the table (gradual boundaries, diffs 10-36), whereas S23 fragments always end on a
+  cut (diffs 50-84). Without (a) six of the nine reference videos merged real night pairs. Sightings come from
   analyze_names.sidebar_visible (OCR of the narrow role-column strips, >= 3 role/未知 labels) sampled
   every 10s inside candidate gaps only, so OCR is loaded lazily and only runs for a few minutes of
   video (_make_gap_checker). Tiny flashes (a red costume in a close-up) neither extend a night nor
   break a chain. Boundaries stay red-light based (refined), never extended by evidence
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases. Phases assembled from >= 3 bursts are exempt (a real night whose outer bursts begin/end on cuts)
-- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_EVIDENCE_GAP=300`, `MIN_EVIDENCE_FRAGMENT=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
+- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_CUT_MERGE_GAP=180`, `MAX_EVIDENCE_GAP=120`, `MIN_EVIDENCE_FRAGMENT=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
 - Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
 
 ### Name Mask Detection (analyze_names.py)
@@ -362,11 +380,19 @@ All 9 videos below achieve 100% detection accuracy (0 FP, 0 miss), re-validated 
 - 11:44 -- 15:14
 - 42:46 -- 47:00
 
-### S23 test set (2026-10, generated by frame inspection; S23 nights are cut-heavy)
+### S23 test set (2026-10, ground truth generated by frame inspection)
 S23 broadcasts intercut nights with the wolves' masked close-ups and a night graphic, overlay a
-transient (~6s) "天黑请闭眼" banner at night start, and hide the sidebar for the whole night. Ground
-truth below was established by reading the red-light transitions and the sidebar frame by frame.
-- xNDz6SStaLo (S23E24 第一局): 9:17 -- 13:13, 1:00:38 -- 1:05:55 (role map 12/12 verified)
+transient (~6s) "天黑请闭眼" banner at night start, and hide the player sidebar for the whole night.
+Boundaries below were read off the red-light transitions frame by frame and cross-checked against
+the top "第X天" day counter (note: the E24 operator skipped 第二天 and labelled day 2 as 第三天).
+Before the evidence-merge / bounded cut-merge changes these videos gave: E24G1 first night missed
+entirely and second night split; E25G1/E25G2 one 13-50 minute "night" each.
+- xNDz6SStaLo (S23E24 第一局): 9:17 -- 13:13, 1:00:38 -- 1:05:55  (role map 12/12 verified)
 - QNxo5hmWLN0 (S23E24 第二局, hidden-roles): 7:03 -- 9:46, 1:28:33 -- 1:35:07
-- (S23E24 第三局 pZ0vo8VRDkA, S23E25 第一局 bzsBWNpIwpo, 第二局 fgw-4eUV0JE, 第三局 HpIM5xTU-t8:
-  see benchmark.py GROUND_TRUTH once audited)
+- bzsBWNpIwpo (S23E25 第一局): 11:10 -- 15:00, 1:04:06 -- 1:06:40, 1:12:19 -- 1:14:01  (role map 12/12)
+- fgw-4eUV0JE (S23E25 第二局, 诡术之境 config): 6:21 -- 10:24, 1:17:52 -- 1:20:54  (role map 12/12)
+- Not benchmarked: pZ0vo8VRDkA (S23E24 第三局) and HpIM5xTU-t8 (S23E25 第三局) are hidden-roles
+  broadcasts that show almost no red table at night (wolf close-ups instead), so the red-light
+  signal yields a partial or empty night list (0 phases on E25G3). The viewer disables the night
+  overlay and masks for hidden-roles videos anyway, so only the jump markers are affected. A normal
+  game whose night had no red table shot at all would still be missed -- the remaining known limit.

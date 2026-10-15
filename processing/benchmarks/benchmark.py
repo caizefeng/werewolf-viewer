@@ -38,6 +38,19 @@ GROUND_TRUTH = {
     "Jnf_dLaVNMU": [
         (704, 914), (2566, 2820),
     ],
+    # S23 (cut-heavy nights; boundaries verified frame by frame, day counter cross-checked)
+    "xNDz6SStaLo": [   # S23E24 第一局
+        (557, 793), (3638, 3955),
+    ],
+    "QNxo5hmWLN0": [   # S23E24 第二局 (hidden-roles broadcast; overlay off in the viewer)
+        (423, 586), (5313, 5707),
+    ],
+    "bzsBWNpIwpo": [   # S23E25 第一局 (day 2 lasts only ~5.5 min)
+        (670, 900), (3846, 4000), (4339, 4441),
+    ],
+    "fgw-4eUV0JE": [   # S23E25 第二局
+        (381, 624), (4672, 4854),
+    ],
 }
 
 TOLERANCE = 5  # seconds (ground truth approximate, buffer settings may differ)

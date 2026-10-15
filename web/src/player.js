@@ -224,10 +224,22 @@ export class WerewolfPlayer {
       const box = this._renderedBox(mask);
       const el = document.createElement("div");
       el.className = "name-mask";
-      el.style.left = `${box.left * 100}%`;
       el.style.top = `${mask.y * 100}%`;
-      el.style.width = `${box.width * 100}%`;
       el.style.height = `${mask.h * 100}%`;
+      if (this.maskMode === "full") {
+        // Overshoot the frame edge by 2px so subpixel rounding can never
+        // leave a sliver of video at the canvas boundary
+        if (this._maskSide(mask) === "left") {
+          el.style.left = "-2px";
+          el.style.width = `calc(${box.width * 100}% + 2px)`;
+        } else {
+          el.style.left = `${box.left * 100}%`;
+          el.style.width = `calc(${box.width * 100}% + 2px)`;
+        }
+      } else {
+        el.style.left = `${box.left * 100}%`;
+        el.style.width = `${box.width * 100}%`;
+      }
       if (!this.masksEnabled) el.classList.add("hidden");
 
       // Inner edge (closer to center): right handle for left masks, left handle for right masks
@@ -529,7 +541,7 @@ export class WerewolfPlayer {
   _renderRolePanel() {
     const panel = this.rolePanel;
     if (!panel) return;
-    const scrollTop = panel.scrollTop;
+    const scrollTop = panel.querySelector(".rp-body")?.scrollTop || 0;
     panel.innerHTML = "";
     panel.classList.toggle("hidden", !this.metadata);
     if (!this.metadata) return;
@@ -605,6 +617,9 @@ export class WerewolfPlayer {
       row.appendChild(paw);
     };
 
+    const body = document.createElement("div");
+    body.className = "rp-body";
+    panel.appendChild(body);
     if (this.revealMode === "player") {
       players.sort((a, b) => a.p.number - b.p.number);
       for (const { side, p } of players) {
@@ -626,7 +641,7 @@ export class WerewolfPlayer {
         if (this._isWolf(p.role)) addPaw(row);
         row.appendChild(role);
         row.addEventListener("click", () => this._toggleReveal(key, side, p));
-        panel.appendChild(row);
+        body.appendChild(row);
       }
     } else {
       for (const e of this._roleEntries()) {
@@ -644,10 +659,10 @@ export class WerewolfPlayer {
         if (this._isWolf(e.role)) addPaw(row);
         row.appendChild(state);
         row.addEventListener("click", () => this._toggleReveal(e.key, e.side, e.p, e.label));
-        panel.appendChild(row);
+        body.appendChild(row);
       }
     }
-    panel.scrollTop = scrollTop;
+    body.scrollTop = scrollTop;
   }
 
   _bindMaskResize(el, handle, mask, handleSide) {

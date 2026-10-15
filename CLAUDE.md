@@ -187,9 +187,13 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR **PP-OCRv6 medium** det+rec (paddleocr 3.7.0) to find Chinese role names (狼人,
   预言家, 女巫, etc.). Chosen 2026-10 by benchmark on 72 verified vertical role labels + 18 未知
-  labels: v6 medium 69/72, v5 server (previous) 68/72, v5 mobile 59/72, all zero false roles; v6 is
-  the smaller/faster model. Apple Vision cannot read the vertical labels (0/72). Model names live in
-  OCR_DET_MODEL / OCR_REC_MODEL; _ensure_models downloads them into processing/models/ on first use
+  labels: v6 medium 69/72, v5 server (previous) 68/72, v5 mobile 59/72, all zero false roles. Speed
+  is NOT the reason: on this CPU (10 cores, no CUDA) v6 medium and v5 server both take ~7-8s per
+  frame for the two 1080p edge crops and ~3s per sidebar-strip check (an earlier "4x faster" figure
+  was measured under heavy background load and was wrong). cpu_threads has no effect;
+  text_det_limit_side_len 736/640 gives no speed-up (640 scored 71/72 but on one benchmark only).
+  Apple Vision cannot read the vertical labels (0/72). Model names live in OCR_DET_MODEL /
+  OCR_REC_MODEL; _ensure_models downloads them into processing/models/ on first use
 - Left + right edge crops are OCR'd in a **single batched `predict()` call** per frame
 - Sets `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` at import (offline-safe, faster init)
 - **Local models**: weights stored in `processing/models/` (self-contained, no global cache dependency)
@@ -270,6 +274,13 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   is a per-video override. With no detected night phases masks stay on throughout (a detection
   failure must not leak)
 - **Mute button** beside the volume slider; volume/mute persist per browser
+- UI gotchas found by headless inspection (Playwright chromium-headless-shell works in this session;
+  Google Chrome headless does not): (1) #role-panel must keep overflow visible -- its ROLES tab and
+  hover trigger are ::after/::before placed outside the box, and overflow-y:auto clipped them so the
+  panel could never open; the row list scrolls in .rp-body instead. (2) .name-mask has no border --
+  the opaque .name-mask-fill must reach the box edge or a 1px sliver of video shows at the frame edge
+  in Full mode; the crimson edge lines are inset box-shadows on the fill, and Full-mode masks overshoot
+  the frame edge by 2px against subpixel rounding
 - **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
   metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
   outward to its frame edge (`_renderedBox`), hiding player avatars/names too; only the inner

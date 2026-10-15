@@ -39,17 +39,30 @@ GROUND_TRUTH = {
         (704, 914), (2566, 2820),
     ],
     # S23 (cut-heavy nights; boundaries verified frame by frame, day counter cross-checked)
-    "xNDz6SStaLo": [   # S23E24 第一局
-        (557, 793), (3638, 3955),
+    "xNDz6SStaLo": [   # S23E24 第一局 -- 26s self-destruct day 2 at 63:46 (dawn banner 63:48, night banner 64:14)
+        (557, 793), (3638, 3826), (3852, 3955),
     ],
-    "QNxo5hmWLN0": [   # S23E24 第二局 (hidden-roles broadcast; overlay off in the viewer)
-        (423, 586), (5313, 5707),
+    "QNxo5hmWLN0": [   # S23E24 第二局 (hidden-roles broadcast; overlay off in the viewer) -- 24s self-destruct day at 91:57; dawn banner 94:48
+        (423, 586), (5313, 5517), (5541, 5685),
     ],
     "bzsBWNpIwpo": [   # S23E25 第一局 (day 2 lasts only ~5.5 min)
         (670, 900), (3846, 4000), (4339, 4441),
     ],
     "fgw-4eUV0JE": [   # S23E25 第二局
         (381, 624), (4672, 4854),
+    ],
+    # S23E26 (2026-10-15 broadcasts; phase banners + self-destruct days + a 152s wolves' close-up gap)
+    "X5J6PIMh368": [   # S23E26 第一局 预女猎白混 -- game ends on day 1
+        (428, 693),
+    ],
+    "3oifxz_xLr4": [   # S23E26 第二局 假面舞会 -- 28s self-destruct day between the last two
+        (435, 676), (2996, 3277), (3305, 3352),
+    ],
+    "40RdPP2AuMs": [   # S23E26 第三局 机械狼通灵师 -- night 1 has a 152s wolves' discussion gap; 34s self-destruct day at 30:00
+        (473, 825), (1581, 1800), (1831, 2013),
+    ],
+    "CBZfebaxD0E": [   # S23E26 第四局 机械狼通灵师
+        (488, 796), (3531, 3715), (4188, 4348),
     ],
 }
 

@@ -146,32 +146,48 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
     season are not red at all because the camera is on close-ups or a graphic. That is why nights are
     assembled temporally (clusters + camera-cut structure) and, since S23, bridged with non-lighting
     evidence (sidebar absence). A night the camera never shows as a red table is still undetectable
-  - Other cues checked and rejected as primary signals: the "天黑请闭眼" start banner exists only in
-    S23 broadcasts (present at both S23 night starts tested, absent at all six S21/S22 starts) and
-    lasts ~6s; the top "第X天" day counter is intermittent and one operator skipped a number (E24
-    labelled day 2 as 第三天); Apple Vision cannot read the vertical sidebar labels. Sidebar
-    absence is the only night cue found to hold across S21-S23
+  - Other cues checked: the "天黑请闭眼" night-start banner and the "天亮请睁眼" dawn banner exist
+    only in S23 broadcasts (absent at all six S21/S22 starts) and last ~6s, so they cannot be the
+    primary signal, but they are decisive DAY evidence where they exist and the merge passes use
+    them (banner_in_frame, since S23E26); the top "第X天" day counter is intermittent and one
+    operator skipped a number (E24 labelled day 2 as 第三天; E26G3's 34s day 2 never got one);
+    Apple Vision cannot read the vertical sidebar labels. Sidebar absence is the only night cue
+    found to hold across S21-S23
   - ROI: upper half of bottom 12% strip (h*0.88 to h*0.93), avoids UI overlays
   - Uses max(left, right) R/G ratio per frame
   - R/G >= 2.5 = red ambient light (night), ~1.0 = normal (day)
 - Computes frame-to-frame pixel diff (`cv2.absdiff`, mean) to distinguish:
   - Real day/night transitions: small diff (~20-30), same scene with lighting change
   - Camera cuts (close-up ↔ table): large diff (~60-80), different scene
-- Pipeline: find_red_clusters → merge_clusters → **merge_by_day_evidence** → filter_cut_bounded_phases → filter by min duration (35s) → **refine_boundaries** → add buffers
+- Pipeline: find_red_clusters → merge_clusters → **merge_by_day_evidence** → filter_cut_bounded_phases → filter by min duration (35s) → **refine_boundaries** → add buffers. Both merge passes share one lazy, cached day-evidence checker (`_make_gap_checker` → `gap_is_night(t0, t1, check_sidebar)`), so OCR loads only when a gap needs it
 - **refine_boundaries**: a raw boundary from the 2s grid is only known to within one interval, which
   made the overlay lead vary between ~1s and ~4s. Each boundary window — (start−2s, start] for red-on,
   [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding
   sequentially (`_scan_window`), so buffers apply to the actual light transition. Output times are
   floats (2 decimals). Buffers: `ENTRY_BUFFER=2.0` before red-on, `EXIT_BUFFER=1.0` after red-off
-- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, and the gap is at most MAX_CUT_MERGE_GAP=180s (the cut rule used to be unbounded; S23's cut-heavy editing chained a night to stray red flashes up to 45 minutes later, yielding 50-80 minute "nights" on S23E25), OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps.
+- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, and the gap is at most MAX_CUT_MERGE_GAP=180s (the cut rule used to be unbounded; S23's cut-heavy editing chained a night to stray red flashes up to 45 minutes later, yielding 50-80 minute "nights" on S23E25), OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps. Either rule is vetoed for a gap of at least `BANNER_MIN_GAP=20`s when the phase banners show a day lay between (`gap_is_night(..., check_sidebar=False)`): an S23 self-destruct day can end on a cut-sized diff (61 at E26G3's dawn, the studio light jumps red→purple), so the cut rule alone is not safe there.
 - **merge_by_day_evidence** (second pass, S23+): newer seasons cut away from the red table for
   over a minute at a time during a night (the wolves' masked close-ups, the night graphic), so a
   night arrives as 14-60s red bursts that neither rule above reconnects, and each burst then dies
   to the 35s minimum (S23E24G1's first night was missed entirely; its second night was split).
-  Day evidence = the player sidebar being on screen: it is visible throughout the day and never
-  inside a night. Two substantial bursts (>= MIN_EVIDENCE_FRAGMENT=6s) at most MAX_EVIDENCE_GAP=120s (longest real in-night gap seen: 76s; the pre-game red-light card-dealing segment sits 186-256s before the first night and has no sidebar after it either)
-  apart are joined if (a) at least one gap boundary is a camera cut (frame diff >= CUT_THRESH at the
-  exact boundary sample: the camera LEFT the table) and (b) no sidebar sighting lies between them.
+  Day evidence = (1) the player sidebar on screen (visible throughout a day, never inside a
+  night), or (2) S23+ phase banners: "天亮请睁眼" within DAWN_BANNER_WINDOW=24s after the first
+  burst's red-off, or "天黑请闭眼" from NIGHT_BANNER_LEAD=12s before to NIGHT_BANNER_LAG=6s after
+  the second burst's red-on (banner_in_frame OCRs the top-center crop every 3s; the night banner
+  precedes the red light by up to ~8s). Banners are checked only for gaps >= BANNER_MIN_GAP=20s.
+  They were added for S23E26 G3, whose 34s self-destruct day (dawn 30:00, 自爆 30:20, night
+  30:34) never brought the sidebar back, so sidebar evidence alone glued nights 2 and 3 into a
+  7-minute "night". Two substantial bursts (>= MIN_EVIDENCE_FRAGMENT=6s) at most
+  MAX_EVIDENCE_GAP=240s apart (longest real in-night gap seen: 152s, E26G3's wolves' discussion
+  during night 1; the cap was 120s before E26, which split that night) are joined if (a) at least
+  one gap boundary is a camera cut (frame diff >= CUT_THRESH at the exact boundary sample: the
+  camera LEFT the table) and (b) no day evidence lies between them. **The 240s cap applies only
+  when the broadcast shows phase banners** (`gap_is_night.has_banners()`: a night-start banner at
+  one of the first three substantial bursts, checked only if some gap is 120-240s); otherwise
+  `MAX_EVIDENCE_GAP_NO_BANNERS=120` as before. Reason: the pre-game red-light card-dealing segment
+  sits 186-256s before the first night with no sidebar after it, and in S21/S22 (no banners)
+  nothing else tells it from an in-night gap -- a flat 240s cap glued it onto the first night of
+  65R0r19JyYk, Xk65eicHSyw and F2J0QK_3gUo. With banners, the first night's 天黑请闭眼 keeps it apart.
   (a) is what keeps S21/S22 intact: those games often have a self-destruct followed by an immediate
   second night ~30s later with no sidebar in between, but there the light goes off and on while the
   camera stays on the table (gradual boundaries, diffs 10-36), whereas S23 fragments always end on a
@@ -181,8 +197,8 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   video (_make_gap_checker). Tiny flashes (a red costume in a close-up) neither extend a night nor
   break a chain. Boundaries stay red-light based (refined), never extended by evidence
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases. Phases assembled from >= 3 bursts are exempt (a real night whose outer bursts begin/end on cuts)
-- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_CUT_MERGE_GAP=180`, `MAX_EVIDENCE_GAP=120`, `MIN_EVIDENCE_FRAGMENT=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
-- Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
+- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_CUT_MERGE_GAP=180`, `MAX_EVIDENCE_GAP=240`, `MAX_EVIDENCE_GAP_NO_BANNERS=120`, `MIN_EVIDENCE_FRAGMENT=6`, `BANNER_MIN_GAP=20`, `DAWN_BANNER_WINDOW=24`, `NIGHT_BANNER_LEAD=12`, `NIGHT_BANNER_LAG=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
+- Performance: the corner scan itself is ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead). The lazy OCR evidence checks (banners every 3s in short windows, sidebar every 10s inside candidate gaps) add roughly 1-4 minutes on videos whose bursts have 20-240s gaps; a full run measured 2-6 min per 40-150 min video on this 10-core CPU under concurrent load (gt_check 2026-10-15)
 
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR **PP-OCRv6 medium** det+rec (paddleocr 3.7.0) to find Chinese role names (狼人,
@@ -210,6 +226,16 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   players' public notes ("没平民", "跳狼人") and the watermark contain role words too. Substring
   matching let notes widen masks into the notes column (S22 right masks came out 0.785 instead of
   ~0.862; some left masks 0.19 instead of 0.14). Notes are public claims, not spoilers
+- **Vertical boxes only** (`item["vert"]`, pixel h > w, set in ocr_items_in_frame): the sidebar's
+  role labels are the only vertical role text; notes, name tags, the config line and the watermark
+  are horizontal. A horizontal exact match does occur: the 0.30 edge crop cuts the bottom-left
+  "配置: 机械狼通灵师" / "假面舞会" config line to a bare "机械狼" / "假面" (S22 and S23E26 G2-G4).
+  Before the filter that one box added a phantom seat-7 row on the left AND stretched the
+  percentile role column over the note column, where "验7平民" then snapped to 平民 and outvoted
+  the real 通灵师 at seat 3. _recover_misread_roles also only snaps vertical boxes, measures the
+  column by median center/width, and tags its boxes `recovered` so they vote at half weight in
+  _cluster_rows (a snapped label never outvotes an exactly read one). build_role_map drops any
+  row whose inferred seat falls outside the side's six seats (1-6 left, 7-12 right)
 - Outer edge from **10th/90th percentile** role-box x-edges (a stray box can't widen it)
 - **Masks cover the role column PLUS the note column**: inner edge extends NOTE_EXTEND (0.12 of
   frame width) past the role toward center, clamped (left <=0.32, right >=0.68) so it never reaches
@@ -237,7 +263,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   early after 3 such frames with no roles). The viewer then starts with masks/overlay OFF
   (toggle still works as an override), badges the video in the library, and the role panel
   shows an explanation instead of rows. Titles don't mark these games; detection is purely from
-  the sidebar labels and is unit-tested but not yet confirmed on a real hidden-roles video
+  the sidebar labels, confirmed on S23E24 G2/G3 and S23E25 G3
 - Raw OCR goes through ocr_items_in_frame (edge_ratio 0.30) -> _roles_from_items;
   detect_names_in_frame is a thin wrapper. analyze_name_regions_full() returns {name_masks,
   role_map, hidden_roles} (what analyze.py writes); analyze_name_regions() still returns masks only
@@ -336,7 +362,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 9 videos below achieve 100% detection accuracy (0 FP, 0 miss), re-validated after the 0.25s boundary refinement (benchmark.py: all GT OK, parallel == sequential, ~1.3x speedup).
+All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential).
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05
@@ -395,13 +421,27 @@ All 9 videos below achieve 100% detection accuracy (0 FP, 0 miss), re-validated 
 S23 broadcasts intercut nights with the wolves' masked close-ups and a night graphic, overlay a
 transient (~6s) "天黑请闭眼" banner at night start, and hide the player sidebar for the whole night.
 Boundaries below were read off the red-light transitions frame by frame and cross-checked against
-the top "第X天" day counter (note: the E24 operator skipped 第二天 and labelled day 2 as 第三天).
+the top "第X天" day counter and, since E26, the dawn / night-start banners. (The E24 counter jumping
+from 第一天 to 第三天 is not an operator slip: day 2 was a 26s self-destruct day that the first GT
+pass missed; the banners found it.)
 Before the evidence-merge / bounded cut-merge changes these videos gave: E24G1 first night missed
 entirely and second night split; E25G1/E25G2 one 13-50 minute "night" each.
-- xNDz6SStaLo (S23E24 第一局): 9:17 -- 13:13, 1:00:38 -- 1:05:55  (role map 12/12 verified)
-- QNxo5hmWLN0 (S23E24 第二局, hidden-roles): 7:03 -- 9:46, 1:28:33 -- 1:35:07
+- xNDz6SStaLo (S23E24 第一局): 9:17 -- 13:13, 1:00:38 -- 1:03:46, 1:04:12 -- 1:05:55  (role map 12/12
+  verified; the 26s day between the last two is a self-destruct: 天亮请睁眼 at 1:03:48, 天黑请闭眼 at 1:04:14)
+- QNxo5hmWLN0 (S23E24 第二局, hidden-roles): 7:03 -- 9:46, 1:28:33 -- 1:31:57, 1:32:21 -- 1:34:45
+  (24s self-destruct day; the red light after the 1:34:48 dawn banner is daytime)
 - bzsBWNpIwpo (S23E25 第一局): 11:10 -- 15:00, 1:04:06 -- 1:06:40, 1:12:19 -- 1:14:01  (role map 12/12)
 - fgw-4eUV0JE (S23E25 第二局, 诡术之境 config): 6:21 -- 10:24, 1:17:52 -- 1:20:54  (role map 12/12)
+- S23E26 (all four games, 2026-10-15; each pulled through the real front-end/CLI path):
+  - X5J6PIMh368 (第一局 预女猎白混): 7:08 -- 11:33 only -- the game ends on day 1 (final board at 38:30)
+  - 3oifxz_xLr4 (第二局 假面舞会): 7:15 -- 11:16, 49:56 -- 54:37, 55:05 -- 55:52 -- a real 28s
+    self-destruct day between the last two (dawn banner 54:42, night banner 55:14)
+  - 40RdPP2AuMs (第三局 机械狼通灵师): 7:53 -- 13:45, 26:21 -- 30:00, 30:31 -- 33:33 -- night 1 holds a
+    152s wolves'-discussion gap (9:08-11:40, no red table at all); 34s self-destruct day at 30:00.
+    Before the banner evidence / 240s cap this gave (7:53-9:09), (11:36-13:45), (26:21-33:33)
+  - CBZfebaxD0E (第四局 机械狼通灵师): 8:08 -- 13:16, 58:51 -- 61:55, 69:48 -- 72:28 (day counter
+    第一天/第二天/第三天 agrees); role map 12/12 after the vertical-label fix (the bare "机械狼" cut
+    from the config line had added a phantom seat 7 and turned seat 3's 通灵师 into 平民)
 - Not benchmarked: pZ0vo8VRDkA (S23E24 第三局) and HpIM5xTU-t8 (S23E25 第三局) are hidden-roles
   broadcasts that show almost no red table at night (wolf close-ups instead), so the red-light
   signal yields a partial or empty night list (0 phases on E25G3). The viewer disables the night

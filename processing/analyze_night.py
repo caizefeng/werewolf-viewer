@@ -237,23 +237,35 @@ MAX_MERGE_GAP = 100   # max gap duration (seconds) for ratio-based merging
 # pass's job.
 MAX_CUT_MERGE_GAP = 180
 # Max gap (seconds) that may be bridged on day-evidence grounds: two red
-# bursts with no sidebar sighting between them are the same night. Newer
-# seasons (S23) cut away from the red table for over a minute at a time
-# (wolf close-ups, the night graphic), which fragments a night into bursts
-# that neither the camera-cut nor the ratio rule can reconnect. The longest
-# genuine in-night gap seen across four S23 games is 76s; the pre-game
-# red-light segment (cards dealt) sits 186-256s before the first night and
-# must not be joined (before the first night there is no sidebar at all,
-# so its absence is no evidence there), hence 120.
-MAX_EVIDENCE_GAP = 120
+# bursts with no day evidence between them are the same night. Newer
+# seasons (S23) cut away from the red table for minutes at a time (the
+# wolves' masked discussion, the night graphic), which fragments a night
+# into bursts that neither the camera-cut nor the ratio rule can reconnect.
+# The longest genuine in-night gap seen is 152s (S23E26 G3, wolves'
+# discussion). The pre-game red-light segment (cards dealt) sits 186-256s
+# before the first night with no sidebar after it either, so a gap that
+# long may only be bridged when the broadcast shows phase banners (S23+):
+# there the first night's start banner keeps the pre-game segment apart.
+# Without banners (S21/S22) the cap stays at the legacy 120s.
+MAX_EVIDENCE_GAP = 240
+MAX_EVIDENCE_GAP_NO_BANNERS = 120
 # A red burst must be at least this long (seconds) to take part in
 # evidence-based merging. Shorter flashes (a red costume in a close-up
 # hitting the corner ROI for one sample) must neither extend a night nor
 # break a chain of real bursts.
 MIN_EVIDENCE_FRAGMENT = 6
 
+# A gap shorter than this is never a day: the shortest real day seen is the
+# ~30s self-destruct day. Only longer gaps get the phase-banner checks.
+BANNER_MIN_GAP = 20
+# Where the S23 phase banners show relative to the light transitions (s)
+DAWN_BANNER_WINDOW = 24   # "天亮请睁眼" appears within this long after red-off
+NIGHT_BANNER_LEAD = 12    # "天黑请闭眼" appears from this long before red-on
+NIGHT_BANNER_LAG = 6      # ... until this long after
 
-def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
+
+def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH,
+                   gap_is_night=None):
     """Merge clusters whose boundaries are camera cuts (not real lighting changes),
     or whose gap still has elevated R/G ratios (night never ended, just close-ups).
 
@@ -274,6 +286,12 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
     Uses a fraction-based check (GAP_ELEVATED_FRACTION) to tolerate occasional
     brief dips below threshold during close-ups, with a floor check (GAP_MIN_FLOOR)
     to reject gaps that contain genuine daytime samples (R/G < 1.05).
+
+    gap_is_night(t0, t1, check_sidebar) (see _make_gap_checker) vetoes a
+    merge across a gap of at least BANNER_MIN_GAP when the broadcast's own
+    phase banners say a day lay in between (S23+ shows "天亮请睁眼" at dawn
+    and "天黑请闭眼" at every night start, so a self-destruct day whose
+    boundaries happen to be camera cuts is not swallowed).
     """
     if not clusters:
         return []
@@ -288,33 +306,40 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
         entry_diff = _max_diff_in_window(diffs, entry_idx)
 
         gap_duration = cs - prev_end
+        join = False
 
         # Both transitions are camera cuts → gap is close-ups during night
         if (exit_diff >= cut_thresh and entry_diff >= cut_thresh
                 and gap_duration <= MAX_CUT_MERGE_GAP):
-            merged[-1] = (merged[-1][0], ce)
-            continue
+            join = True
 
         # Gap with elevated R/G ratios → close-up shots during night
-        if gap_duration <= MAX_MERGE_GAP and exit_idx < entry_idx:
+        elif gap_duration <= MAX_MERGE_GAP and exit_idx < entry_idx:
             gap_ratios = ratios[exit_idx:entry_idx]
             if len(gap_ratios) > 0:
                 elevated_frac = np.mean(gap_ratios >= GAP_RED_THRESH)
                 if (elevated_frac >= GAP_ELEVATED_FRACTION
                         and gap_ratios.min() >= GAP_MIN_FLOOR):
-                    merged[-1] = (merged[-1][0], ce)
-                    continue
+                    join = True
 
-        # Real gap → keep separate
-        merged.append((cs, ce))
+        if (join and gap_is_night is not None and gap_duration >= BANNER_MIN_GAP
+                and not gap_is_night(prev_end, cs, check_sidebar=False)):
+            join = False
+
+        if join:
+            merged[-1] = (merged[-1][0], ce)
+        else:
+            merged.append((cs, ce))
     return merged
 
 
 def merge_by_day_evidence(phases, gap_is_night, timestamps, diffs,
-                          cut_thresh=CUT_THRESH, min_fragment=MIN_EVIDENCE_FRAGMENT):
+                          cut_thresh=CUT_THRESH, min_fragment=MIN_EVIDENCE_FRAGMENT,
+                          max_gap=MAX_EVIDENCE_GAP):
     """Second merge pass: join consecutive substantial phases whose gap (at
-    most MAX_EVIDENCE_GAP) was created by the camera leaving the table and
-    contains no day evidence, i.e. the sidebar was never seen between them.
+    most max_gap) was created by the camera leaving the table and
+    contains no day evidence: no dawn banner after the first burst, no
+    night-start banner at the second, and the sidebar never seen between.
 
     "The camera left" = at least one gap boundary is a camera cut (frame
     diff >= cut_thresh at the exact boundary sample). A genuine short day
@@ -342,7 +367,7 @@ def merge_by_day_evidence(phases, gap_is_night, timestamps, diffs,
             entry_idx = np.searchsorted(timestamps, s, side='left')
             cut_at_boundary = (_max_diff_in_window(diffs, exit_idx, 0) >= cut_thresh
                                or _max_diff_in_window(diffs, entry_idx, 0) >= cut_thresh)
-            if 0 < gap <= MAX_EVIDENCE_GAP and cut_at_boundary and gap_is_night(pe, s):
+            if 0 < gap <= max_gap and cut_at_boundary and gap_is_night(pe, s):
                 out[last] = (ps, e)
                 # tiny phases that now fall inside the merged span are absorbed
                 out = out[:last + 1] + [q for q in out[last + 1:] if not (ps <= q[0] and q[1] <= e)]
@@ -353,23 +378,66 @@ def merge_by_day_evidence(phases, gap_is_night, timestamps, diffs,
 
 
 def _make_gap_checker(video_path, clusters):
-    """Lazy day-evidence checker for merge_clusters, or None when no gap
-    between clusters is short enough to qualify (then no OCR is loaded)."""
+    """Lazy day-evidence checker shared by merge_clusters and
+    merge_by_day_evidence, or None when no gap between clusters is short
+    enough to qualify (then no OCR is loaded).
+
+    gap_is_night(t0, t1, check_sidebar=True) is False when the gap between a
+    red-off at t0 and the next red-on at t1 holds day evidence:
+    - gaps of at least BANNER_MIN_GAP: a dawn banner within DAWN_BANNER_WINDOW
+      after t0, or a night-start banner around t1 (S23+ broadcasts; a
+      self-destruct day is ~30s and never brings the sidebar back)
+    - with check_sidebar: the player sidebar seen anywhere in the gap
+    Results are cached per gap; OCR frames are sampled sparsely.
+    """
     gaps = [cs - pe for (_, pe), (cs, _) in zip(clusters, clusters[1:])]
     if not any(0 < g <= MAX_EVIDENCE_GAP for g in gaps):
         return None
     state = {}
+    cache = {}
 
-    def gap_is_night(t0, t1):
+    def _load():
         if "ocr" not in state:
-            from analyze_names import _init_ocr, day_evidence_in
-            print("  Checking cluster gaps for day evidence (sidebar OCR)...")
+            from analyze_names import _init_ocr, day_evidence_in, banner_seen
+            print("  Checking cluster gaps for day evidence (phase banners + sidebar OCR)...")
             state["ocr"] = _init_ocr()
-            state["fn"] = day_evidence_in
+            state["sidebar"] = day_evidence_in
+            state["banner"] = banner_seen
             state["cap"] = cv2.VideoCapture(video_path)
             state["fps"] = state["cap"].get(cv2.CAP_PROP_FPS)
-        return not state["fn"](state["ocr"], state["cap"], state["fps"], t0, t1)
+        return state["ocr"], state["cap"], state["fps"]
 
+    def gap_is_night(t0, t1, check_sidebar=True):
+        if t1 <= t0:
+            return True
+        key = (t0, t1, check_sidebar)
+        if key in cache:
+            return cache[key]
+        ocr, cap, fps = _load()
+        day = False
+        if t1 - t0 >= BANNER_MIN_GAP:
+            day = (state["banner"](ocr, cap, fps, t0, t0 + DAWN_BANNER_WINDOW, "dawn")
+                   or state["banner"](ocr, cap, fps, t1 - NIGHT_BANNER_LEAD,
+                                      t1 + NIGHT_BANNER_LAG, "night"))
+        if not day and check_sidebar:
+            day = state["sidebar"](ocr, cap, fps, t0, t1)
+        cache[key] = not day
+        return cache[key]
+
+    def has_banners():
+        """Does this broadcast show phase banners? Decided from the night-start
+        banner at the first substantial red bursts (S23+: yes; S21/S22: no)."""
+        if "has_banners" not in state:
+            ocr, cap, fps = _load()
+            starts = [cs for cs, ce in clusters if ce - cs >= MIN_EVIDENCE_FRAGMENT][:3]
+            state["has_banners"] = any(
+                state["banner"](ocr, cap, fps, cs - NIGHT_BANNER_LEAD, cs + NIGHT_BANNER_LAG, "night")
+                for cs in starts)
+            print(f"  Phase banners {'found' if state['has_banners'] else 'not found'} "
+                  f"at the first night start(s)")
+        return state["has_banners"]
+
+    gap_is_night.has_banners = has_banners
     return gap_is_night
 
 
@@ -468,8 +536,14 @@ def analyze_night_phases(video_path, num_workers=0):
     clusters = find_red_clusters(timestamps, ratios)
     print(f"  Found {len(clusters)} red cluster(s)")
 
-    phases = merge_clusters(clusters, timestamps, ratios, diffs)
-    phases = merge_by_day_evidence(phases, _make_gap_checker(video_path, clusters), timestamps, diffs)
+    gap_is_night = _make_gap_checker(video_path, clusters)
+    phases = merge_clusters(clusters, timestamps, ratios, diffs, gap_is_night=gap_is_night)
+    if gap_is_night is not None:
+        gaps = [cs - pe for (_, pe), (cs, _) in zip(phases, phases[1:])]
+        max_gap = MAX_EVIDENCE_GAP_NO_BANNERS
+        if any(MAX_EVIDENCE_GAP_NO_BANNERS < g <= MAX_EVIDENCE_GAP for g in gaps) and gap_is_night.has_banners():
+            max_gap = MAX_EVIDENCE_GAP
+        phases = merge_by_day_evidence(phases, gap_is_night, timestamps, diffs, max_gap=max_gap)
 
     # Filter phases bounded by camera cuts on both sides (not real transitions).
     # A phase assembled from several red bursts is a real night whose outer

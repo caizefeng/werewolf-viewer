@@ -119,16 +119,26 @@ def ocr_items_in_frame(ocr, frame, edge_ratio=0.30, min_score=0.5):
                 "x0": round((x_offset + x1) / w, 4),
                 "x1": round((x_offset + x2) / w, 4),
                 "y0": round(y1 / h, 4), "y1": round(y2 / h, 4),
+                # Sidebar role labels are vertical text; notes, names, the
+                # config line and the watermark are horizontal
+                "vert": bool((y2 - y1) > (x2 - x1)),
             })
     return items
 
 
 def _roles_from_items(items):
-    """Exact role-name boxes from raw OCR items (exact match: notes and the
-    watermark contain role words too)."""
+    """Exact role-name boxes from raw OCR items.
+
+    Exact match only (notes and the watermark contain role words too), and
+    only vertical boxes: the sidebar's role labels are the only vertical
+    role text. Horizontal exact matches do occur -- the edge crop cuts the
+    bottom "配置: 机械狼通灵师" config line to a bare "机械狼" -- and one such
+    box adds a phantom seat and stretches the role column over the note
+    column, where "验7平民" then snaps to 平民 (S23E26 G4).
+    """
     regions = []
     for it in items:
-        if it["text"] in ROLE_SET:
+        if it["text"] in ROLE_SET and it.get("vert", True):
             regions.append({
                 "x": it["x0"], "y": it["y0"],
                 "w": round(it["x1"] - it["x0"], 4),
@@ -189,13 +199,11 @@ def _recover_misread_roles(all_regions, all_items):
         regs = [r for r in all_regions if r["side"] == side]
         if not regs:
             continue
-        rx0 = float(np.percentile([r["x"] for r in regs], 10))
-        rx1 = float(np.percentile([r["x"] + r["w"] for r in regs], 90))
-        cx = (rx0 + rx1) / 2
-        col_w = max(rx1 - rx0, 0.01)
+        cx = float(np.median([r["x"] + r["w"] / 2 for r in regs]))
+        col_w = max(float(np.median([r["w"] for r in regs])), 0.01)
         for it in all_items:
             t = it["text"]
-            if it["side"] != side or t in ROLE_SET:
+            if it["side"] != side or t in ROLE_SET or not it.get("vert", True):
                 continue
             if not (2 <= len(t) <= 5) or not re.search(r"[\u4e00-\u9fff]", t):
                 continue
@@ -208,7 +216,7 @@ def _recover_misread_roles(all_regions, all_items):
             recovered.append({"x": it["x0"], "y": it["y0"],
                               "w": round(it["x1"] - it["x0"], 4),
                               "h": round(it["y1"] - it["y0"], 4),
-                              "text": role, "side": side})
+                              "text": role, "side": side, "recovered": True})
     return recovered
 
 
@@ -299,15 +307,16 @@ def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=
 def _cluster_rows(regs, tol=0.05):
     """Group role boxes into player rows by vertical position (majority role
     per row tolerates per-frame OCR noise)."""
-    pts = sorted((r["y"] + r["h"] / 2, r["text"]) for r in regs)
+    pts = sorted((r["y"] + r["h"] / 2, r["text"], 0.5 if r.get("recovered") else 1.0)
+                 for r in regs)
     clusters = []
-    for yc, role in pts:
+    for yc, role, wgt in pts:
         if clusters and yc - clusters[-1]["last"] <= tol:
             c = clusters[-1]
-            c["ys"].append(yc); c["roles"].append(role); c["last"] = yc
+            c["ys"].append(yc); c["votes"][role] += wgt; c["last"] = yc
         else:
-            clusters.append({"ys": [yc], "roles": [role], "last": yc})
-    return [{"role": Counter(c["roles"]).most_common(1)[0][0],
+            clusters.append({"ys": [yc], "votes": Counter({role: wgt}), "last": yc})
+    return [{"role": c["votes"].most_common(1)[0][0],
              "yc": float(np.median(c["ys"])), "count": len(c["ys"])}
             for c in clusters]
 
@@ -396,7 +405,12 @@ def build_role_map(all_items, all_regions):
         seats = _infer_seats(rows, nums, side)
 
         players = []
+        lo, hi = SEAT_BASE[side], SEAT_BASE[side] + 5
         for i, row in enumerate(rows):
+            if not lo <= seats[i] <= hi:
+                print(f"  Dropping {side} row '{row['role']}' at y={row['yc']:.2f}: "
+                      f"seat {seats[i]} is outside {lo}-{hi}")
+                continue
             y0, y1 = bands[i]
             players.append({"number": seats[i], "role": row["role"],
                             "y0": round(y0, 4), "y1": round(y1, 4)})
@@ -554,6 +568,52 @@ def day_evidence_in(ocr, cap, fps, t0, t1, step=10.0):
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(t * fps)))
         ok, frame = cap.read()
         if ok and sidebar_visible(ocr, frame):
+            return True
+        t += step
+    return False
+
+
+# Phase banners the S23 broadcast overlays at the top center for ~6s: a
+# vertical "天黑请闭眼" at every night start (visible from ~8s before the
+# light turns red) and a horizontal "天亮请睁眼" at every dawn (2-16s after
+# the light goes off). Older seasons show neither; night detection then
+# falls back to the sidebar check alone.
+NIGHT_BANNER = "天黑请闭眼"
+DAWN_BANNER = "天亮请睁眼"
+
+
+def _banner_match(text, banner):
+    """True if an OCR text is (most of) the banner: the stylised glyphs
+    occasionally lose the first character ("亮请睁眼")."""
+    text = text.strip()
+    if len(text) < 4:
+        return False
+    return text in banner or banner in text or _levenshtein(text, banner) <= 1
+
+
+def banner_in_frame(ocr, frame):
+    """Which phase banner the frame shows: "night", "dawn" or None."""
+    h, w = frame.shape[:2]
+    crop = frame[0:int(h * 0.5), int(w * 0.28):int(w * 0.72)]
+    result = ocr.predict(crop)[0]
+    for text, score in zip(result.get("rec_texts", []), result.get("rec_scores", [])):
+        if score < 0.5:
+            continue
+        if _banner_match(text, NIGHT_BANNER):
+            return "night"
+        if _banner_match(text, DAWN_BANNER):
+            return "dawn"
+    return None
+
+
+def banner_seen(ocr, cap, fps, t0, t1, kind, step=3.0):
+    """True if the given banner ("night" / "dawn") shows in any frame sampled
+    every `step` seconds in [t0, t1]."""
+    t = max(0.0, t0)
+    while t <= t1:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(t * fps)))
+        ok, frame = cap.read()
+        if ok and banner_in_frame(ocr, frame) == kind:
             return True
         t += step
     return False

@@ -48,12 +48,16 @@ SEAT_FIRST_ROW_Y = 0.125  # fallback center of the first row
 # Reveal band of a row (fraction of frame height): the role label's own box
 # plus BAND_PAD, and never closer than BAND_GUARD to the midpoint toward a
 # neighbouring row. Bands used to run midpoint to midpoint, but the S22
-# ribbons nearly touch (about 12px between a ribbon's ornament and the next
-# at 1080p), so a midpoint boundary showed the neighbour's ribbon tip, whose
-# colour gives away that player's faction. 0.02 = 22px at 1080p: the label
-# stays fully readable, the neighbours' ribbons stay covered.
-BAND_PAD = 0.02
-BAND_GUARD = 0.02
+# ribbons nearly touch (a ribbon ends within ~0.005 of the midpoint and the
+# next begins ~0.005 past it), so a midpoint boundary showed the neighbour's
+# ribbon tip, whose colour gives away that player's faction. With these
+# values a 2-character row opens yc ± 0.067 (the ribbon itself is ± ~0.075)
+# and keeps 6-10px from the neighbour's ribbon at 1080p.
+# The viewer recomputes the band from `label` / `span` with its own copy of
+# these constants (player.js BAND_PAD / BAND_GUARD), so tuning them there
+# needs no re-scan; y0/y1 are stored for older consumers.
+BAND_PAD = 0.035
+BAND_GUARD = 0.013
 
 # Label the broadcast shows instead of a role in "hidden-roles" games: the
 # show itself keeps roles as 未知 and reveals some as the game goes (deaths,
@@ -432,7 +436,9 @@ def build_role_map(all_items, all_regions):
             if y1 - y0 < 0.03:  # rows too close for a label-based band: guarded midpoints
                 y0, y1 = mu + BAND_GUARD, md - BAND_GUARD
             players.append({"number": seats[i], "role": row["role"],
-                            "y0": round(y0, 4), "y1": round(y1, 4)})
+                            "y0": round(y0, 4), "y1": round(y1, 4),
+                            "label": [round(row["ty0"], 4), round(row["ty1"], 4)],
+                            "span": [round(mu, 4), round(md, 4)]})
         players.sort(key=lambda p: p["number"])
         role_map[side] = players
     return role_map

@@ -247,12 +247,17 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   the user wants seat numbers only). Rows cluster role boxes by y (_cluster_rows, which also keeps
   the median label box ty0..ty1 per row). The role string is only a menu label (the viewer reveals
   real pixels)
-- **Reveal band y0..y1 = the row's own label box ± BAND_PAD (0.02), kept ≥ BAND_GUARD (0.02) inside
-  the midpoints to the neighbouring rows** (_bands_from_centers still gives the midpoints, used to
-  attach seat badges). Bands used to run midpoint to midpoint; the S22 ribbons nearly touch (~12px
-  between a ribbon's ornament and the next at 1080p), so a midpoint boundary showed the neighbour's
-  ribbon tip, whose colour gives the faction away (user report 2026-10-15). Rows closer than 0.03
-  fall back to the guarded midpoints
+- **Reveal band = the row's own label box ± BAND_PAD (0.035), kept ≥ BAND_GUARD (0.013) inside the
+  midpoints to the neighbouring rows.** Each role_map entry stores `label: [ty0, ty1]` (median
+  label box) and `span: [mu, md]` (midpoints, from _bands_from_centers, also used to attach seat
+  badges) plus a precomputed y0/y1; **the viewer recomputes the band from label/span with its own
+  BAND_PAD / BAND_GUARD (player.js, same values), so retuning is a JS edit with no re-scan** (older
+  metadata without label/span falls back to y0/y1). Bands used to run midpoint to midpoint; S22
+  ribbons end within ~0.005 of the midpoint and the next starts ~0.005 past it, so a midpoint
+  boundary showed the neighbour's ribbon tip, whose colour gives the faction away (user report
+  2026-10-15). The first fix used 0.02/0.02 and read as too narrow; 0.035/0.013 opens yc ± 0.067
+  on a 2-character row (ribbon ± ~0.075) with 6-10px to the neighbour's ribbon. Rows closer than
+  0.03 fall back to the guarded midpoints. Reveal keys are side:seat
 - `processing/update_role_maps.py [ID...]` re-scans only the sidebar roles (~2 min/video) and
   rewrites role_map / hidden_roles (and name_masks when never hand-edited) -- use it after role-map
   changes instead of ↻ re-analyze, which also replaces manual night/mask edits

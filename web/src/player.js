@@ -7,6 +7,24 @@
 // player names/avatars too); "role" covers only the role-name boxes
 const MASK_MODE_KEY = "werewolf.maskMode";
 const VOLUME_KEY = "werewolf.volume"; // {volume, muted} as last set by the user
+
+// Reveal band of a player row: their role label's own box plus BAND_PAD,
+// never closer than BAND_GUARD to the midpoint toward a neighbouring row
+// (fractions of frame height). S22 ribbons end within ~0.005 of the
+// midpoint, so the guard is what keeps a neighbour's ribbon colour hidden;
+// the pad only matters for 3-character labels. Older metadata without
+// label/span falls back to its stored y0/y1.
+const BAND_PAD = 0.035;
+const BAND_GUARD = 0.013;
+function revealBand(p) {
+  if (Array.isArray(p.label) && Array.isArray(p.span)) {
+    const y0 = Math.max(p.label[0] - BAND_PAD, p.span[0] + BAND_GUARD);
+    const y1 = Math.min(p.label[1] + BAND_PAD, p.span[1] - BAND_GUARD);
+    if (y1 - y0 >= 0.03) return [y0, y1];
+    return [p.span[0] + BAND_GUARD, p.span[1] - BAND_GUARD];
+  }
+  return [p.y0, p.y1];
+}
 const REVEAL_MODE_KEY = "werewolf.revealMode"; // "player" | "role"
 
 export class WerewolfPlayer {
@@ -272,8 +290,9 @@ export class WerewolfPlayer {
       // row, with the seat number in the outer corner (seat IDs are public)
       const mh = mask.h || 1;
       for (const p of (this.roleMap?.[side] || [])) {
-        const top = Math.max(0, (p.y0 - mask.y) / mh);
-        const bot = Math.min(1, (p.y1 - mask.y) / mh);
+        const [by0, by1] = revealBand(p);
+        const top = Math.max(0, (by0 - mask.y) / mh);
+        const bot = Math.min(1, (by1 - mask.y) / mh);
         if (bot <= top) continue;
         const frame = document.createElement("div");
         frame.className = "name-mask-frame" + (this.revealed.has(this._revealKey(side, p)) ? " revealed" : "");
@@ -392,14 +411,14 @@ export class WerewolfPlayer {
   // ── Role reveal ──
 
   _revealKey(side, p) {
-    return `${side}:${p.y0}`;
+    return `${side}:${p.number}`;
   }
 
   _revealedBandsForSide(side) {
     const players = (this.roleMap && this.roleMap[side]) || [];
     return players
       .filter((p) => this.revealed.has(this._revealKey(side, p)))
-      .map((p) => [p.y0, p.y1]);
+      .map((p) => revealBand(p));
   }
 
   // Opaque fill segments = the full mask column minus the revealed bands

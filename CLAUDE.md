@@ -359,6 +359,17 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   downloaded video (e.g. after detection improvements) and reloads metadata if that video is open.
   Replaces manual edits (confirm dialog)
 - Info bar shows the open video's title (also set as the document title)
+- **Visual polish pass (2026-10-15, reviewed with headless screenshots at 1600x1000 and 1366x768)**:
+  the occasional editing actions (+ Night phase, + Mask, Reset masks/nights) live in an **✎ Edit
+  popover** (`#edit-menu`, main.js) so the controls bar fits a laptop width (it used to cut off
+  "Reset Nights" at 1366px); the phase indicator is a tinted status chip (gold day / indigo night,
+  `.indicator.night`), not a button look-alike; both sidebars take the player column's height
+  (`--stage-h` from a ResizeObserver in main.js) so the three columns end on one line and the
+  lists scroll inside; library rows are a grid with the hidden-roles badge on its own line (the
+  inline badge used to squeeze titles into four lines); the slide-out panels are centred in the
+  area above the controls strip (`top: calc((100% - 56px) / 2)`) and capped so they never run
+  under the controls; the night-jump tab is a labelled NIGHTS tab matching ROLES; the empty
+  search column shows a hint
 - Volume and user mute are remembered per browser (localStorage); the night auto-mute is never persisted
 - Time display shows h:mm:ss above one hour
 - Mute button (🔊/🔇) beside the volume slider. `userMuted` tracks a deliberate mute

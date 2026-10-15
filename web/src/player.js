@@ -900,6 +900,7 @@ export class WerewolfPlayer {
     // The indicator reflects the phase itself; only the blackout/mute
     // depend on masks being enabled
     this.phaseIndicator.textContent = this.isNight ? "🌙 Night" : "☀️ Day";
+    this.phaseIndicator.classList.toggle("night", this.isNight);
     if (this.isNight && this.masksEnabled) {
       this.nightOverlay.classList.remove("hidden");
       this.savedVolume = this.video.volume;

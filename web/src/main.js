@@ -599,6 +599,34 @@ async function init() {
     else startDownload(btn.dataset.id);
   });
 
+  // Edit popover in the controls bar (night phases / masks)
+  const editBtn = document.getElementById("edit-menu-btn");
+  const editMenu = document.getElementById("edit-menu");
+  const setEditMenu = (open) => {
+    editMenu.classList.toggle("hidden", !open);
+    editBtn.classList.toggle("active", open);
+    editBtn.setAttribute("aria-expanded", String(open));
+  };
+  editBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setEditMenu(editMenu.classList.contains("hidden"));
+  });
+  editMenu.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.target.closest(".menu-btn")) setEditMenu(false);
+  });
+  document.addEventListener("click", () => setEditMenu(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setEditMenu(false); });
+
+  // Both sidebars take the player column's height so the three columns share
+  // one bottom edge (the lists scroll inside)
+  const stage = document.getElementById("player-container");
+  const setStageHeight = () => {
+    document.documentElement.style.setProperty("--stage-h", `${Math.round(stage.getBoundingClientRect().height)}px`);
+  };
+  new ResizeObserver(setStageHeight).observe(stage);
+  setStageHeight();
+
   // Pick up jobs already running (page reload); polling stops itself when idle
   ensureJobPolling();
 }

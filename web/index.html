@@ -68,10 +68,16 @@
               <button id="toggle-masks" class="ctrl-btn active" title="Shortcut: M">Masks: On</button>
               <button id="mask-mode-btn" class="ctrl-btn" title="Mask coverage">Mask: Full</button>
               <span id="phase-indicator" class="indicator">☀️ Day</span>
-              <button id="add-phase-btn" class="ctrl-btn" title="Add night phase at current time">+ Night</button>
-              <button id="add-mask-btn" class="ctrl-btn" title="Add a new name mask region">+ Mask</button>
-              <button id="reset-masks-btn" class="ctrl-btn" title="Reset mask regions to default">Reset Masks</button>
-              <button id="reset-nights-btn" class="ctrl-btn" title="Reset night phases to default">Reset Nights</button>
+              <div id="edit-menu-wrap">
+                <button id="edit-menu-btn" class="ctrl-btn" title="Edit night phases and masks" aria-haspopup="true" aria-expanded="false">✎ Edit</button>
+                <div id="edit-menu" class="hidden" role="menu">
+                  <button id="add-phase-btn" class="menu-btn" title="Add a night phase at the current time">+ Night phase</button>
+                  <button id="add-mask-btn" class="menu-btn" title="Add a new name mask region">+ Mask</button>
+                  <div class="menu-sep"></div>
+                  <button id="reset-masks-btn" class="menu-btn" title="Restore the detected mask regions">Reset masks</button>
+                  <button id="reset-nights-btn" class="menu-btn" title="Restore the detected night phases">Reset nights</button>
+                </div>
+              </div>
               <span class="spacer"></span>
               <button id="fullscreen-btn" class="ctrl-btn" title="Fullscreen">⛶</button>
             </div>

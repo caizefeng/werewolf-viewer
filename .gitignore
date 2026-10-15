@@ -22,3 +22,6 @@ MEMORY.md
 
 # OS
 .DS_Store
+
+# Rendered demo games (regenerate with processing/demo/make_demo_video.py)
+processing/demo/library/

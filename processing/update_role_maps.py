@@ -20,7 +20,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from analyze_names import analyze_name_regions_full
 
-VIDEOS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "videos")
+VIDEOS_DIR = os.environ.get("WEREWOLF_VIDEOS_DIR") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "videos")
 
 
 def update(video_id):

@@ -387,10 +387,23 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   unmuting during a night phase (masks on) takes effect at dawn rather than immediately
 - Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s, N=next night start, Shift+N=previous
 
+## Demo mode (synthetic broadcasts, no real footage)
+- `processing/demo/make_demo_video.py [OUT_DIR]` renders three made-up 12-player games with ffmpeg
+  (H.264): drawn stage, player cards with invented names, role ribbons at the layout the analysis
+  expects, red-tinted nights with the sidebar hidden, a wolves'-discussion close-up inside a night,
+  and the 天黑请闭眼 / 天亮请睁眼 banners. One game is a hidden-roles broadcast (未知 ribbons). Output:
+  `processing/demo/library/<id>/video.mp4 + info.json` and `catalogue.json` (gitignored)
+- Run the server with `WEREWOLF_DEMO=1` to make `/api/search` list the catalogue and downloads
+  copy the rendered game in (`processing/demo/fake_download.py`, ~12s with progress); analysis
+  then runs for real on the synthetic video. `WEREWOLF_VIDEOS_DIR=<dir>` points the server at
+  another library so the demo never touches `videos/`. The README screenshots in
+  `docs/screenshots/` were taken this way (a second server on `--port 5174`), so no tournament
+  footage, titles or players appear in the repository
+
 ## API Endpoints (vite.config.js middleware)
 - `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag included for the library badge)
 - `GET /api/downloaded` - list all video dirs with hasVideo/hasMetadata flags
-- `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}). Merges two
+- `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}); in demo mode, the rendered catalogue. Merges two
   sources, deduped by id, both filtered by all query keywords: (1) the 200 most recent
   uploads (cached 5 min) — covers broad queries, which YouTube's search tab caps at ~20;
   (2) the channel search tab `@JCDSS/search?query=…` — finds older episodes that have

@@ -3,8 +3,15 @@ import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 
-const videosDir = path.resolve(__dirname, "../videos");
+// WEREWOLF_VIDEOS_DIR points the server at another library (e.g. a demo one)
+const videosDir = process.env.WEREWOLF_VIDEOS_DIR
+  ? path.resolve(process.env.WEREWOLF_VIDEOS_DIR)
+  : path.resolve(__dirname, "../videos");
 const processingDir = path.resolve(__dirname, "../processing");
+// WEREWOLF_DEMO=1: search lists the rendered demo games (processing/demo)
+// and "downloads" copy them in; analysis runs for real on them
+const DEMO = !!process.env.WEREWOLF_DEMO;
+const demoDir = path.join(processingDir, "demo", "library");
 const venvPython = path.join(processingDir, "venv", "bin", "python3");
 // Prefer the venv's yt-dlp (kept up to date via pip) over PATH
 const venvYtDlp = path.join(processingDir, "venv", "bin", "yt-dlp");
@@ -134,7 +141,7 @@ function spawnForJob(job, args, onClose) {
 function runDownload(job) {
   setPhase(job, "downloading");
   spawnForJob(job, [
-    path.join(processingDir, "download.py"),
+    path.join(processingDir, DEMO ? "demo/fake_download.py" : "download.py"),
     `--video-id=${job.videoId}`, "--quality=1080",
     "--output-dir", path.join(videosDir, job.videoId),
   ], (code) => {
@@ -329,6 +336,15 @@ export default defineConfig({
             if (!body) return;
             const { query } = body;
             if (!query) return jsonResponse(res, 400, { error: "Missing query" });
+            if (DEMO) {
+              try {
+                const all = JSON.parse(fs.readFileSync(path.join(demoDir, "catalogue.json"), "utf-8"));
+                const kws = query.toLowerCase().split(/\s+/).filter(Boolean);
+                return jsonResponse(res, 200, all.filter((v) => kws.every((k) => v.title.toLowerCase().includes(k))));
+              } catch (err) {
+                return jsonResponse(res, 500, { error: `Demo catalogue missing: ${err.message}` });
+              }
+            }
 
             // Split query into keywords; video must contain ALL keywords
             const keywords = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -427,6 +443,8 @@ export default defineConfig({
             const dir = path.join(videosDir, videoId);
             if (!fs.existsSync(dir)) return jsonResponse(res, 404, { error: "Not found" });
             fs.rmSync(dir, { recursive: true, force: true });
+            // A finished job for a deleted video must not keep showing "Done" in the search rows
+            if (job) jobs.delete(videoId);
             return jsonResponse(res, 200, { deleted: true });
           }
 

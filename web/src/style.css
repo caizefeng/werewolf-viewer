@@ -254,7 +254,7 @@ header h1::after {
 
 /* Empty state: the column has a purpose before the first search */
 #search-results:empty::before {
-  content: "Find episodes on the 京城大师赛 channel and download them into the library. Several downloads and analyses can run at once.";
+  content: "Search the channel's episodes and download them into the library. Several downloads and analyses can run at once.";
   display: block;
   padding: 2.5rem 1.25rem;
   color: var(--text-muted);

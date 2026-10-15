@@ -161,8 +161,11 @@ if __name__ == "__main__":
     if args.video_path:
         video_path = args.video_path
     else:
+        # WEREWOLF_VIDEOS_DIR points at another library (the dev server passes
+        # it through when it was started with one, e.g. demo mode)
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        video_path = os.path.join(base_dir, "videos", args.video_id, "video.mp4")
+        videos_dir = os.environ.get("WEREWOLF_VIDEOS_DIR") or os.path.join(base_dir, "videos")
+        video_path = os.path.join(videos_dir, args.video_id, "video.mp4")
 
     if not os.path.exists(video_path):
         print(f"Error: Video not found at {video_path}")

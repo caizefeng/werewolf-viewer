@@ -45,6 +45,16 @@ SEAT_BASE = {"left": 1, "right": 7}
 SEAT_ROW_SPACING = 0.16   # fallback row pitch (fraction of frame height)
 SEAT_FIRST_ROW_Y = 0.125  # fallback center of the first row
 
+# Reveal band of a row (fraction of frame height): the role label's own box
+# plus BAND_PAD, and never closer than BAND_GUARD to the midpoint toward a
+# neighbouring row. Bands used to run midpoint to midpoint, but the S22
+# ribbons nearly touch (about 12px between a ribbon's ornament and the next
+# at 1080p), so a midpoint boundary showed the neighbour's ribbon tip, whose
+# colour gives away that player's faction. 0.02 = 22px at 1080p: the label
+# stays fully readable, the neighbours' ribbons stay covered.
+BAND_PAD = 0.02
+BAND_GUARD = 0.02
+
 # Label the broadcast shows instead of a role in "hidden-roles" games: the
 # show itself keeps roles as 未知 and reveals some as the game goes (deaths,
 # claims), so the audience is already blind
@@ -306,23 +316,28 @@ def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=
 
 def _cluster_rows(regs, tol=0.05):
     """Group role boxes into player rows by vertical position (majority role
-    per row tolerates per-frame OCR noise)."""
-    pts = sorted((r["y"] + r["h"] / 2, r["text"], 0.5 if r.get("recovered") else 1.0)
-                 for r in regs)
+    per row tolerates per-frame OCR noise). Each row carries the median
+    label box (ty0..ty1) for its reveal band."""
+    pts = sorted((r["y"] + r["h"] / 2, r["y"], r["y"] + r["h"], r["text"],
+                  0.5 if r.get("recovered") else 1.0) for r in regs)
     clusters = []
-    for yc, role, wgt in pts:
+    for yc, y0, y1, role, wgt in pts:
         if clusters and yc - clusters[-1]["last"] <= tol:
             c = clusters[-1]
-            c["ys"].append(yc); c["votes"][role] += wgt; c["last"] = yc
+            c["ys"].append(yc); c["tops"].append(y0); c["bots"].append(y1)
+            c["votes"][role] += wgt; c["last"] = yc
         else:
-            clusters.append({"ys": [yc], "votes": Counter({role: wgt}), "last": yc})
+            clusters.append({"ys": [yc], "tops": [y0], "bots": [y1],
+                             "votes": Counter({role: wgt}), "last": yc})
     return [{"role": c["votes"].most_common(1)[0][0],
-             "yc": float(np.median(c["ys"])), "count": len(c["ys"])}
+             "yc": float(np.median(c["ys"])), "count": len(c["ys"]),
+             "ty0": float(np.median(c["tops"])), "ty1": float(np.median(c["bots"]))}
             for c in clusters]
 
 
 def _bands_from_centers(cs):
-    """Vertical reveal band for each row: midpoints to the adjacent rows."""
+    """Vertical extent of each row: midpoints to the adjacent rows (used to
+    attach seat badges to rows and as the outer limit of reveal bands)."""
     n = len(cs)
     bands = []
     for i, c in enumerate(cs):
@@ -411,7 +426,11 @@ def build_role_map(all_items, all_regions):
                 print(f"  Dropping {side} row '{row['role']}' at y={row['yc']:.2f}: "
                       f"seat {seats[i]} is outside {lo}-{hi}")
                 continue
-            y0, y1 = bands[i]
+            mu, md = bands[i]
+            y0 = max(row["ty0"] - BAND_PAD, mu + BAND_GUARD)
+            y1 = min(row["ty1"] + BAND_PAD, md - BAND_GUARD)
+            if y1 - y0 < 0.03:  # rows too close for a label-based band: guarded midpoints
+                y0, y1 = mu + BAND_GUARD, md - BAND_GUARD
             players.append({"number": seats[i], "role": row["role"],
                             "y0": round(y0, 4), "y1": round(y1, 4)})
         players.sort(key=lambda p: p["number"])

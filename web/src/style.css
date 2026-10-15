@@ -552,10 +552,15 @@ header h1::after {
 #video {
   width: 100%;
   display: block;
-  aspect-ratio: 16 / 9;
+  /* --video-aspect is set from the stream's real dimensions on load */
+  aspect-ratio: var(--video-aspect, 16 / 9);
 }
 
-/* ── Fullscreen ── */
+/* ── Fullscreen ──
+   Browsers force the fullscreen element to fill the screen (UA !important
+   rules), so the video letterboxes inside the wrapper on non-16:9 screens.
+   player.js (_fitMasksToVideo) pins #name-masks to the video's content box
+   there; the night overlay may cover the bars too. */
 #video-wrapper:fullscreen,
 #video-wrapper:-webkit-full-screen {
   width: 100vw;
@@ -669,6 +674,47 @@ header h1::after {
 }
 
 /* Inner vignette — darkened edges with faint crimson bleed */
+/* Per-player wire frames on a mask: a thin gold outline per seat band so
+   the mask reads as the sidebar's six slots. Covered rows are dim; the
+   revealed row's frame glows around the opening. */
+.name-mask-frame {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  box-sizing: border-box;
+  border: 1px solid rgba(217, 173, 66, 0.3);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.name-mask-frame.revealed {
+  border-color: rgba(217, 173, 66, 0.9);
+  box-shadow: 0 0 10px rgba(217, 173, 66, 0.35), inset 0 0 12px rgba(217, 173, 66, 0.12);
+}
+
+.name-mask-frame-num {
+  position: absolute;
+  top: 3px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: rgba(217, 173, 66, 0.55);
+}
+
+.name-mask.left .name-mask-frame-num {
+  left: 5px;
+}
+
+.name-mask.right .name-mask-frame-num {
+  right: 5px;
+}
+
+.name-mask-frame.revealed .name-mask-frame-num {
+  color: rgba(217, 173, 66, 0.95);
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+}
+
 .name-mask-fill::before {
   content: "";
   position: absolute;

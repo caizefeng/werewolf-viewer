@@ -104,6 +104,7 @@ export class WerewolfPlayer {
     // Fullscreen
     this.fullscreenBtn.addEventListener("click", () => this._toggleFullscreen());
     document.addEventListener("fullscreenchange", () => this._onFullscreenChange());
+    window.addEventListener("resize", () => this._fitMasksToVideo());
 
     // Add night phase
     this.addPhaseBtn.addEventListener("click", () => this._addNightPhase());
@@ -117,6 +118,13 @@ export class WerewolfPlayer {
 
     // Controls show/hide
     this.wrapper.addEventListener("mousemove", () => this._showControls());
+    // Let the wrapper (and so every overlay) follow the stream's real aspect
+    this.video.addEventListener("loadedmetadata", () => {
+      if (this.video.videoWidth && this.video.videoHeight) {
+        this.wrapper.style.setProperty("--video-aspect", (this.video.videoWidth / this.video.videoHeight).toFixed(4));
+      }
+      this._fitMasksToVideo();
+    });
     this.wrapper.addEventListener("mouseleave", () => this._startHideTimer());
 
     // Keyboard
@@ -247,6 +255,8 @@ export class WerewolfPlayer {
       const innerSide = side === "left" ? "right" : "left";
       const outerSide = side;
 
+      el.classList.add(side);
+
       // Opaque fill in vertical segments, leaving a gap at each revealed
       // player row so their role shows through (role-reveal panel)
       for (const [segTop, segBot] of this._fillSegments(side, mask)) {
@@ -255,6 +265,25 @@ export class WerewolfPlayer {
         fill.style.top = `${segTop * 100}%`;
         fill.style.height = `${(segBot - segTop) * 100}%`;
         el.appendChild(fill);
+      }
+
+      // Per-player wire frames: one thin outline per seat band (gold, not
+      // the mask's colour), dim while covered and bright around a revealed
+      // row, with the seat number in the outer corner (seat IDs are public)
+      const mh = mask.h || 1;
+      for (const p of (this.roleMap?.[side] || [])) {
+        const top = Math.max(0, (p.y0 - mask.y) / mh);
+        const bot = Math.min(1, (p.y1 - mask.y) / mh);
+        if (bot <= top) continue;
+        const frame = document.createElement("div");
+        frame.className = "name-mask-frame" + (this.revealed.has(this._revealKey(side, p)) ? " revealed" : "");
+        frame.style.top = `${top * 100}%`;
+        frame.style.height = `${(bot - top) * 100}%`;
+        const num = document.createElement("span");
+        num.className = "name-mask-frame-num";
+        num.textContent = p.number;
+        frame.appendChild(num);
+        el.appendChild(frame);
       }
 
       // Inner hover zone + handle
@@ -798,6 +827,30 @@ export class WerewolfPlayer {
     if (!document.fullscreenElement) {
       this.wrapper.classList.remove("hide-cursor");
     }
+    this._fitMasksToVideo();
+  }
+
+  // In fullscreen the browser forces the wrapper to fill the screen and the
+  // video letterboxes inside it (object-fit: contain). Masks and reveal
+  // gaps are fractions of their container, so on a 16:10 or ultrawide
+  // screen they would drift off the player rows and show a neighbour's
+  // ribbon. Pin the masks container to the video's content box instead.
+  _fitMasksToVideo() {
+    const el = this.nameMasksContainer;
+    const fs = document.fullscreenElement === this.wrapper;
+    if (!fs || !this.video.videoWidth || !this.video.videoHeight) {
+      el.style.left = el.style.top = el.style.width = el.style.height = "";
+      return;
+    }
+    const W = this.wrapper.clientWidth;
+    const H = this.wrapper.clientHeight;
+    const scale = Math.min(W / this.video.videoWidth, H / this.video.videoHeight);
+    const vw = this.video.videoWidth * scale;
+    const vh = this.video.videoHeight * scale;
+    el.style.left = `${(W - vw) / 2}px`;
+    el.style.top = `${(H - vh) / 2}px`;
+    el.style.width = `${vw}px`;
+    el.style.height = `${vh}px`;
   }
 
   // ── Controls show/hide ──

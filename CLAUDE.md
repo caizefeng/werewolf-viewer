@@ -244,9 +244,18 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   line, news ticker)
 - **Role map** (build_role_map): role_map = {left:[...], right:[...]}, each player
   {number, role, y0, y1} -- seat ID only, NO names (OCR of the stylized name tags was unreliable;
-  the user wants seat numbers only). Rows cluster role boxes by y (_cluster_rows); reveal bands
-  are midpoints between rows (_bands_from_centers). The role string is only a menu label (the
-  viewer reveals real pixels)
+  the user wants seat numbers only). Rows cluster role boxes by y (_cluster_rows, which also keeps
+  the median label box ty0..ty1 per row). The role string is only a menu label (the viewer reveals
+  real pixels)
+- **Reveal band y0..y1 = the row's own label box ± BAND_PAD (0.02), kept ≥ BAND_GUARD (0.02) inside
+  the midpoints to the neighbouring rows** (_bands_from_centers still gives the midpoints, used to
+  attach seat badges). Bands used to run midpoint to midpoint; the S22 ribbons nearly touch (~12px
+  between a ribbon's ornament and the next at 1080p), so a midpoint boundary showed the neighbour's
+  ribbon tip, whose colour gives the faction away (user report 2026-10-15). Rows closer than 0.03
+  fall back to the guarded midpoints
+- `processing/update_role_maps.py [ID...]` re-scans only the sidebar roles (~2 min/video) and
+  rewrites role_map / hidden_roles (and name_masks when never hand-edited) -- use it after role-map
+  changes instead of ↻ re-analyze, which also replaces manual night/mask edits
 - **Seat numbers are inferred from row position** (_infer_seats): seats run 1-6 top-to-bottom on
   the left and 7-12 on the right at a fixed pitch, so every anchored row (a seat badge OCR did
   read, outward of the role column) votes seat = anchor + round(dy / pitch) for every row; majority
@@ -296,6 +305,10 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   Clicking a WOLF (any role containing 狼) reveals/hides the whole wolf team in either mode,
   mimicking playing as a wolf who knows the pack. Blind/All buttons; the revealed set persists per
   video. Needs a role map (re-analyze older videos). Hidden-roles broadcasts show an explanation only
+- **Per-player wire frames on the masks** (`.name-mask-frame`, drawn by createNameMasks from the
+  role map): one thin gold outline per seat band (dim while covered, glowing around a revealed row)
+  with the seat number in the outer corner, so a mask reads as the sidebar's six slots. Gold was
+  chosen because it is not the mask's dark navy/crimson. Videos without a role map get plain masks
 - Masks default ON for every loaded video (spoiler-safe), OFF for hidden-roles broadcasts; the toggle
   is a per-video override. With no detected night phases masks stay on throughout (a detection
   failure must not leak)
@@ -306,7 +319,11 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   panel could never open; the row list scrolls in .rp-body instead. (2) .name-mask has no border --
   the opaque .name-mask-fill must reach the box edge or a 1px sliver of video shows at the frame edge
   in Full mode; the crimson edge lines are inset box-shadows on the fill, and Full-mode masks overshoot
-  the frame edge by 2px against subpixel rounding
+  the frame edge by 2px against subpixel rounding. (3) In fullscreen the browser forces the wrapper
+  to fill the screen (UA !important rules; author CSS cannot resize it) and the video letterboxes
+  inside, while masks are fractions of their container -- on a 16:10 MacBook screen every reveal
+  gap drifted off its row. `_fitMasksToVideo` pins #name-masks to the video's content box on
+  fullscreenchange/resize/loadedmetadata and clears the inline geometry on exit
 - **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
   metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
   outward to its frame edge (`_renderedBox`), hiding player avatars/names too; only the inner

@@ -40,7 +40,7 @@ export class WerewolfPlayer {
     this.videoId = null;
     this.roleMap = {};
     this.revealed = new Set(); // reveal keys the user has un-blinded
-    this.closeVision = false; // broadcast hides roles itself (未知 labels)
+    this.hiddenRoles = false; // hidden-roles broadcast (roles shown as 未知)
     this.revealMode = this._loadRevealMode();
     this._defaultNameMasks = null;
     this._defaultNightPhases = null;
@@ -139,14 +139,14 @@ export class WerewolfPlayer {
         this.metadata.original_night_phases ?? this.metadata.night_phases));
       this.statusEl.textContent = `Loaded: ${this.metadata.night_phases.length} night phases, ${this.metadata.name_masks.length} mask regions`;
       this.roleMap = this.metadata.role_map || {};
-      this.closeVision = !!this.metadata.close_vision;
-      // Close-vision games (the broadcast hides roles itself) start with
+      this.hiddenRoles = !!this.metadata.hidden_roles;
+      // Hidden-roles broadcasts (the show hides roles itself) start with
       // masks off; every other video starts masked (spoiler-safe default)
-      this.masksEnabled = !this.closeVision;
+      this.masksEnabled = !this.hiddenRoles;
       this._updateMaskToggleBtn();
       this.isNight = false;
       this._updateNightState();
-      if (this.closeVision) this.statusEl.textContent += " \u00b7 close-vision game: masks off";
+      if (this.hiddenRoles) this.statusEl.textContent += " \u00b7 hidden-roles broadcast: masks off";
       this._loadReveal();
       this.createNameMasks();
       this._updateMaskVisibility(this.video.currentTime);
@@ -157,7 +157,7 @@ export class WerewolfPlayer {
       // Clear stale UI from the previously loaded video
       this.roleMap = {};
       this.revealed = new Set();
-      this.closeVision = false;
+      this.hiddenRoles = false;
       this.masksEnabled = true;
       this._updateMaskToggleBtn();
       this.createNameMasks();
@@ -182,7 +182,7 @@ export class WerewolfPlayer {
     this.videoId = null;
     this.roleMap = {};
     this.revealed = new Set();
-    this.closeVision = false;
+    this.hiddenRoles = false;
     this.masksEnabled = true;
     this._updateMaskToggleBtn();
     this.createNameMasks();
@@ -549,8 +549,8 @@ export class WerewolfPlayer {
       panel.appendChild(el);
     };
 
-    if (this.closeVision) {
-      empty("Close-vision game: the broadcast hides roles itself (\u672a\u77e5 until revealed in-game), so there is nothing to reveal here.");
+    if (this.hiddenRoles) {
+      empty("Hidden-roles broadcast: the show itself keeps roles as \u672a\u77e5 and reveals them as the game goes, so masks and role reveal are off for this video.");
       return;
     }
 
@@ -1072,10 +1072,10 @@ export class WerewolfPlayer {
   _updateMaskToggleBtn() {
     const on = this.masksEnabled;
     this.toggleBtn.textContent = on ? "Masks: On"
-      : (this.closeVision ? "Masks: Off (close-vision)" : "Masks: Off");
+      : (this.hiddenRoles ? "Masks: Off (hidden roles)" : "Masks: Off");
     this.toggleBtn.classList.toggle("active", on);
-    this.toggleBtn.title = this.closeVision
-      ? "Close-vision game: the broadcast hides roles itself, so masks are off. Click (or M) to force them on."
+    this.toggleBtn.title = this.hiddenRoles
+      ? "Hidden-roles broadcast: the show keeps roles as \u672a\u77e5 itself, so masks are off. Click (or M) to force them on."
       : "Shortcut: M";
   }
 

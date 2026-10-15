@@ -1353,8 +1353,8 @@ header h1::after {
   font-weight: 600;
 }
 
-/* Library: close-vision games */
-#video-list li.close-vision {
+/* Library: hidden-roles broadcasts */
+#video-list li.hidden-roles {
   color: var(--text-muted);
 }
 

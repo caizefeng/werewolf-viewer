@@ -81,13 +81,13 @@ async function loadVideoList() {
       });
 
       li.appendChild(titleSpan);
-      if (v.closeVision) {
+      if (v.hiddenRoles) {
         // The broadcast hides roles itself: masks/reveal are off for this one
-        li.classList.add("close-vision");
+        li.classList.add("hidden-roles");
         const badge = document.createElement("span");
         badge.className = "video-badge";
-        badge.textContent = "close-vision";
-        badge.title = "Close-vision game: roles are hidden by the broadcast itself; masks and role reveal are off";
+        badge.textContent = "hidden roles";
+        badge.title = "Hidden-roles broadcast: the show keeps roles as \u672a\u77e5 and reveals them as the game goes; masks and role reveal are off";
         li.appendChild(badge);
       }
       li.appendChild(reBtn);

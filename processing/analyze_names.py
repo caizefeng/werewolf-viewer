@@ -19,6 +19,14 @@ from paddleocr import PaddleOCR
 # Local model directory (self-contained, no global cache dependency)
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
+# OCR models. PP-OCRv6 medium (paddleocr >= 3.7.0) replaced PP-OCRv5 server
+# in 2026-10: on 72 verified vertical role labels + 18 未知 labels it scored
+# 69/72 (v5 server 68/72, v5 mobile 59/72) with zero false roles, and it is
+# the smaller/faster model. Apple Vision was also tried and cannot read the
+# vertical labels at all (0/72).
+OCR_DET_MODEL = "PP-OCRv6_medium_det"
+OCR_REC_MODEL = "PP-OCRv6_medium_rec"
+
 ROLE_NAMES = [
     "狼人", "狼王", "白狼王", "预言家", "女巫", "猎人",
     "白痴", "守卫", "村民", "平民", "通灵师", "丘比特",
@@ -37,8 +45,9 @@ SEAT_BASE = {"left": 1, "right": 7}
 SEAT_ROW_SPACING = 0.16   # fallback row pitch (fraction of frame height)
 SEAT_FIRST_ROW_Y = 0.125  # fallback center of the first row
 
-# Label the broadcast shows instead of a role in "close-vision" games
-# (the audience is kept blind until a role is revealed in-game)
+# Label the broadcast shows instead of a role in "hidden-roles" games: the
+# show itself keeps roles as 未知 and reveals some as the game goes (deaths,
+# claims), so the audience is already blind
 UNKNOWN_LABEL = "未知"
 
 
@@ -213,8 +222,37 @@ def analyze_name_regions_with_ocr(ocr, video_path):
 
     Returns (masks, unique_texts) tuple (role map omitted).
     """
-    masks, _role_map, texts, _close_vision = _analyze(ocr, video_path)
+    masks, _role_map, texts, _hidden_roles = _analyze(ocr, video_path)
     return masks, texts
+
+
+def probe_sidebar(ocr, video_path, fractions=(0.15, 0.25, 0.35, 0.5, 0.65, 0.8, 0.9)):
+    """OCR the sidebar at a few points spread over the whole video.
+
+    Returns [{t, unknown, roles}] per probe. Used (a) to detect hidden-roles
+    broadcasts robustly -- the sidebar can be absent for minutes (intermission
+    screens) or show a transient placeholder, so one scan window is not
+    enough -- and (b) to pick the role-scan window: the first probe that
+    shows role labels tells where the game is on screen.
+    """
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    dur = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
+    probes = []
+    for fr in fractions:
+        t = int(dur * fr)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(t * fps)))
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        items = ocr_items_in_frame(ocr, frame)
+        probes.append({
+            "t": t,
+            "unknown": sum(1 for it in items if it["text"] == UNKNOWN_LABEL),
+            "roles": len(_roles_from_items(items)),
+        })
+    cap.release()
+    return probes
 
 
 def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=8):
@@ -222,7 +260,7 @@ def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=
 
     Accumulates raw OCR items (for the role map) from frames containing role
     names, stopping after min_named_frames such frames. unknown_frames counts
-    frames showing two or more 未知 labels (close-vision games); once three
+    frames showing two or more 未知 labels (hidden-roles games); once three
     such frames are seen with no role names at all, the scan stops early.
     """
     all_regions = []
@@ -251,7 +289,7 @@ def _scan_range(ocr, video_path, start_sec, end_sec, interval, min_named_frames=
                     print(f"  Collected {named} named frames by {sec}s")
                     break
             elif unknown_frames >= 3 and named == 0:
-                print(f"  Close-vision labels in {unknown_frames} frames, no roles — stopping scan at {sec}s")
+                print(f"  Hidden-roles labels in {unknown_frames} frames, no roles — stopping scan at {sec}s")
                 break
     finally:
         gen.close()
@@ -404,51 +442,70 @@ def build_masks(all_regions):
 def _analyze(ocr, video_path):
     """Core analysis logic shared by public entry points.
 
-    Returns (masks, role_map, unique_texts, close_vision).
+    Returns (masks, role_map, unique_texts, hidden_roles).
 
     Scans 1100s-1400s first. If both sides aren't found, extends the scan
     to 1400s-2000s with a coarser interval to find late-appearing names.
     """
-    print("Sampling frames (1100s-1400s at 10s intervals)...")
-    all_regions, all_items, num_sampled, unknown_frames = _scan_range(
-        ocr, video_path, 1100, 1400, interval=10)
-    print(f"Processed {num_sampled} frames")
+    DEFAULT_MASKS = [
+        {"x": 0.05, "y": 0, "w": 0.10, "h": 1.0},
+        {"x": 0.85, "y": 0, "w": 0.10, "h": 1.0},
+    ]
 
-    # Close-vision game: the broadcast shows 未知 instead of a role until it
-    # is revealed in-game, i.e. the audience is already blind. Masks and the
-    # night overlay are pointless there, so flag it and skip the expensive
-    # extended scans.
-    close_vision = unknown_frames >= 2
-    if close_vision:
-        print(f"  Close-vision game detected ({unknown_frames} frames show '{UNKNOWN_LABEL}')")
+    # Hidden-roles broadcast? Decide from probes spread over the whole video,
+    # not from one window: the sidebar can be absent for minutes and the
+    # non-revealed seats can briefly show a placeholder before 未知.
+    probes = probe_sidebar(ocr, video_path)
+    print("  Sidebar probes: " + ", ".join(
+        f"{p['t']}s {p['roles']} roles/{p['unknown']} unknown" for p in probes))
+    unknown_probes = sum(1 for p in probes if p["unknown"] >= 2)
+    if unknown_probes >= 2:
+        print(f"  Hidden-roles broadcast detected ({UNKNOWN_LABEL} in {unknown_probes} probes); "
+              "masks and role map are not applicable")
+        return DEFAULT_MASKS, {}, set(), True
+
+    # Role-scan window: start a minute before the first probe that shows
+    # role labels (games don't all reach the sidebar by the same time)
+    first = next((p["t"] for p in probes if p["roles"] >= 4), None)
+    scan_start = max(0, first - 60) if first is not None else 1100
+    scan_end = scan_start + 300
+    print(f"Sampling frames ({scan_start}s-{scan_end}s at 10s intervals)...")
+    all_regions, all_items, num_sampled, unknown_frames = _scan_range(
+        ocr, video_path, scan_start, scan_end, interval=10)
+    print(f"Processed {num_sampled} frames")
 
     sides_found = set(r["side"] for r in all_regions)
     missing_sides = {"left", "right"} - sides_found
+    ext_start, ext_end = scan_end, scan_end + 600
 
-    if missing_sides and all_regions and not close_vision:
+    if missing_sides and all_regions:
         print(f"  Missing {', '.join(missing_sides)} side. "
-              f"Extending scan (1400s-2000s at 30s intervals)...")
-        er, ei, es, _ = _scan_range(
-            ocr, video_path, 1400, 2000, interval=30, min_named_frames=4)
+              f"Extending scan ({ext_start}s-{ext_end}s at 30s intervals)...")
+        er, ei, es, eu = _scan_range(
+            ocr, video_path, ext_start, ext_end, interval=30, min_named_frames=4)
         num_sampled += es
+        unknown_frames += eu
         all_regions.extend(r for r in er if r["side"] in missing_sides)
         all_items.extend(it for it in ei if it["side"] in missing_sides)
         print(f"  Extended scan: {es} more frames")
 
-    if not all_regions and not close_vision:
+    if not all_regions:
         print("  No names in primary range. Trying extended scan "
-              "(1400s-2000s at 30s intervals)...")
-        all_regions, all_items, es, _ = _scan_range(
-            ocr, video_path, 1400, 2000, interval=30, min_named_frames=4)
+              f"({ext_start}s-{ext_end}s at 30s intervals)...")
+        all_regions, all_items, es, eu = _scan_range(
+            ocr, video_path, ext_start, ext_end, interval=30, min_named_frames=4)
         num_sampled += es
+        unknown_frames += eu
         print(f"  Extended scan: {es} frames")
+
+    # Secondary check from the scans themselves
+    if unknown_frames >= 2:
+        print(f"  Hidden-roles broadcast detected ({UNKNOWN_LABEL} in {unknown_frames} scanned frames)")
+        return DEFAULT_MASKS, {}, set(), True
 
     if not all_regions:
         print("No role names detected. Using default mask positions.")
-        return [
-            {"x": 0.05, "y": 0, "w": 0.10, "h": 1.0},
-            {"x": 0.85, "y": 0, "w": 0.10, "h": 1.0},
-        ], {}, set(), close_vision
+        return DEFAULT_MASKS, {}, set(), False
 
     # Recover rows whose role label the OCR misread (械狼, 狼人学, 自神)
     before = len(all_regions)
@@ -467,84 +524,107 @@ def _analyze(ocr, video_path):
     for sd, players in role_map.items():
         print(f"  role_map[{sd}]: " + ", ".join(
             f"{p['number']}={p['role']}" for p in players))
-    return masks, role_map, unique_texts, close_vision
+    return masks, role_map, unique_texts, False
+
+
+def sidebar_visible(ocr, frame):
+    """True if the player sidebar (role / 未知 labels) is on screen.
+
+    The sidebar is shown throughout the day and never during a night (nights
+    cut between the red-lit table, the night graphic and masked close-ups),
+    so a sidebar sighting is the day evidence used to decide whether two red
+    bursts belong to the same night. Only the narrow role-column strips are
+    OCR'd, so this is cheap.
+    """
+    h, w = frame.shape[:2]
+    strips = [frame[:, int(0.06 * w):int(0.18 * w)], frame[:, int(0.82 * w):int(0.94 * w)]]
+    n = 0
+    for r in ocr.predict(strips):
+        for text, score in zip(r.get("rec_texts", []), r.get("rec_scores", [])):
+            t = text.strip()
+            if score >= 0.5 and (t == UNKNOWN_LABEL or _snap_role(t) is not None):
+                n += 1
+    return n >= 3
+
+
+def day_evidence_in(ocr, cap, fps, t0, t1, step=10.0):
+    """Any sidebar sighting in (t0, t1)? Samples every `step` seconds."""
+    t = t0 + step / 2
+    while t < t1:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(t * fps)))
+        ok, frame = cap.read()
+        if ok and sidebar_visible(ocr, frame):
+            return True
+        t += step
+    return False
 
 
 def _ensure_models():
-    """Download OCR models to local directory if not present.
+    """Local copies of the OCR models, downloaded through PaddleOCR's hub
+    resolution on first use and copied into processing/models/ so the
+    pipeline has no dependency on the global cache afterwards.
 
-    Uses PaddleOCR's built-in model resolution to download, then copies
-    from the global cache to the project-local models/ directory.
+    Returns (det_dir, rec_dir), or (None, None) if the local copy failed
+    (then the models are used straight from PaddleOCR's cache).
     """
-    det_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_det")
-    rec_dir = os.path.join(_MODELS_DIR, "PP-OCRv5_server_rec")
+    dirs = {n: os.path.join(_MODELS_DIR, n) for n in (OCR_DET_MODEL, OCR_REC_MODEL)}
 
-    det_ok = os.path.isdir(det_dir) and os.path.exists(
-        os.path.join(det_dir, "inference.pdiparams"))
-    rec_ok = os.path.isdir(rec_dir) and os.path.exists(
-        os.path.join(rec_dir, "inference.pdiparams"))
+    def ok(d):
+        return os.path.isdir(d) and os.path.exists(os.path.join(d, "inference.pdiparams"))
 
-    if det_ok and rec_ok:
-        return det_dir, rec_dir
+    if all(ok(d) for d in dirs.values()):
+        return dirs[OCR_DET_MODEL], dirs[OCR_REC_MODEL]
 
-    print("  Models not found locally. Downloading...")
+    print(f"  OCR models {OCR_DET_MODEL} / {OCR_REC_MODEL} not found locally. Downloading...")
     os.makedirs(_MODELS_DIR, exist_ok=True)
-
-    # Use PaddleOCR with model names to trigger download to global cache,
-    # then copy to local directory
     import shutil
     tmp_ocr = PaddleOCR(
         lang="ch",
-        text_detection_model_name="PP-OCRv5_server_det",
-        text_recognition_model_name="PP-OCRv5_server_rec",
+        text_detection_model_name=OCR_DET_MODEL,
+        text_recognition_model_name=OCR_REC_MODEL,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
     )
     del tmp_ocr
 
-    # Find downloaded models in global cache
     cache_base = os.path.expanduser("~/.paddlex/official_models")
-    for model_name in ["PP-OCRv5_server_det", "PP-OCRv5_server_rec"]:
-        src = os.path.join(cache_base, model_name)
-        dst = os.path.join(_MODELS_DIR, model_name)
-        if os.path.isdir(src) and not os.path.isdir(dst):
+    for name, dst in dirs.items():
+        src = os.path.join(cache_base, name)
+        if ok(src):
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)
             shutil.copytree(src, dst)
-            print(f"  Copied {model_name} to local models/")
-        elif os.path.isdir(src):
-            # Update existing (in case of partial download)
-            shutil.rmtree(dst)
-            shutil.copytree(src, dst)
-            print(f"  Updated {model_name} in local models/")
-
-    return det_dir, rec_dir
+            print(f"  Copied {name} to local models/")
+    if not all(ok(d) for d in dirs.values()):
+        print("  Could not copy the models locally; using PaddleOCR's cache directly")
+        return None, None
+    return dirs[OCR_DET_MODEL], dirs[OCR_REC_MODEL]
 
 
 def _init_ocr():
-    """Initialize PaddleOCR with local models and optimal device."""
-    # Ensure models are downloaded
+    """Initialize PaddleOCR with the local models and the best device."""
     det_dir, rec_dir = _ensure_models()
 
-    # Detect GPU availability (CUDA only; PaddlePaddle has no Apple MPS support)
+    # CUDA only; PaddlePaddle has no Apple MPS support
     device = "cpu"
     try:
         import paddle
         if paddle.device.is_compiled_with_cuda():
             device = "gpu:0"
-            print(f"  Using GPU (CUDA)")
+            print("  Using GPU (CUDA)")
     except Exception:
         pass
     if device == "cpu":
-        print(f"  Using CPU")
+        print("  Using CPU")
 
-    return PaddleOCR(
-        text_detection_model_dir=det_dir,
-        text_recognition_model_dir=rec_dir,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        device=device,
-    )
+    kw = dict(use_doc_orientation_classify=False, use_doc_unwarping=False,
+              use_textline_orientation=False, device=device)
+    if det_dir and rec_dir:
+        return PaddleOCR(text_detection_model_dir=det_dir,
+                         text_recognition_model_dir=rec_dir, **kw)
+    return PaddleOCR(text_detection_model_name=OCR_DET_MODEL,
+                     text_recognition_model_name=OCR_REC_MODEL, **kw)
 
 
 def analyze_name_regions(video_path):
@@ -553,11 +633,11 @@ def analyze_name_regions(video_path):
 
 
 def analyze_name_regions_full(video_path):
-    """Full name-detection result: {name_masks, role_map, close_vision}."""
+    """Full name-detection result: {name_masks, role_map, hidden_roles}."""
     print("Initializing PaddleOCR...")
     ocr = _init_ocr()
-    masks, role_map, _texts, close_vision = _analyze(ocr, video_path)
-    return {"name_masks": masks, "role_map": role_map, "close_vision": close_vision}
+    masks, role_map, _texts, hidden_roles = _analyze(ocr, video_path)
+    return {"name_masks": masks, "role_map": role_map, "hidden_roles": hidden_roles}
 
 
 if __name__ == "__main__":

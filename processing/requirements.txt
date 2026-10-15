@@ -1,6 +1,7 @@
 # [default] pulls yt-dlp-ejs, the JS challenge solver YouTube requires
 # (needs a JS runtime on PATH too: brew install deno)
 yt-dlp[default]
-paddleocr
-paddlepaddle
+# PP-OCRv6 medium needs paddleocr >= 3.7.0 (tested stack below)
+paddleocr==3.7.0
+paddlepaddle==3.3.1
 opencv-python

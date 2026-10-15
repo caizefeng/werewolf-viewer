@@ -230,6 +230,17 @@ GAP_RED_THRESH = 1.3  # R/G ratio threshold for "elevated" (close-up shots durin
 GAP_ELEVATED_FRACTION = 0.6  # fraction of gap samples that must be elevated to merge
 GAP_MIN_FLOOR = 1.05  # minimum R/G in gap — below this means genuine daytime (blocks merge)
 MAX_MERGE_GAP = 100   # max gap duration (seconds) for ratio-based merging
+# Max gap (seconds) that may be bridged on day-evidence grounds: two red
+# bursts with no sidebar sighting between them are the same night. Newer
+# seasons (S23) cut away from the red table for over a minute at a time
+# (wolf close-ups, the night graphic), which fragments a night into bursts
+# that neither the camera-cut nor the ratio rule can reconnect.
+MAX_EVIDENCE_GAP = 300
+# A red burst must be at least this long (seconds) to take part in
+# evidence-based merging. Shorter flashes (a red costume in a close-up
+# hitting the corner ROI for one sample) must neither extend a night nor
+# break a chain of real bursts.
+MIN_EVIDENCE_FRAGMENT = 6
 
 
 def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
@@ -285,6 +296,57 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH):
         # Real gap → keep separate
         merged.append((cs, ce))
     return merged
+
+
+def merge_by_day_evidence(phases, gap_is_night, min_fragment=MIN_EVIDENCE_FRAGMENT):
+    """Second merge pass: join consecutive substantial phases whose gap (at
+    most MAX_EVIDENCE_GAP) contains no day evidence, i.e. the sidebar was
+    never seen between them.
+
+    Only phases at least min_fragment long take part: a stray one-sample
+    flash neither extends a night nor interrupts a chain of real bursts
+    (it is skipped and later dropped by the minimum-duration filter).
+    """
+    if gap_is_night is None or len(phases) < 2:
+        return phases
+    out = []
+    last = None  # index in out of the last substantial phase
+    for s, e in phases:
+        if e - s < min_fragment:
+            out.append((s, e))
+            continue
+        if last is not None:
+            ps, pe = out[last]
+            gap = s - pe
+            if 0 < gap <= MAX_EVIDENCE_GAP and gap_is_night(pe, s):
+                out[last] = (ps, e)
+                # tiny phases that now fall inside the merged span are absorbed
+                out = out[:last + 1] + [q for q in out[last + 1:] if not (ps <= q[0] and q[1] <= e)]
+                continue
+        out.append((s, e))
+        last = len(out) - 1
+    return sorted(out)
+
+
+def _make_gap_checker(video_path, clusters):
+    """Lazy day-evidence checker for merge_clusters, or None when no gap
+    between clusters is short enough to qualify (then no OCR is loaded)."""
+    gaps = [cs - pe for (_, pe), (cs, _) in zip(clusters, clusters[1:])]
+    if not any(0 < g <= MAX_EVIDENCE_GAP for g in gaps):
+        return None
+    state = {}
+
+    def gap_is_night(t0, t1):
+        if "ocr" not in state:
+            from analyze_names import _init_ocr, day_evidence_in
+            print("  Checking cluster gaps for day evidence (sidebar OCR)...")
+            state["ocr"] = _init_ocr()
+            state["fn"] = day_evidence_in
+            state["cap"] = cv2.VideoCapture(video_path)
+            state["fps"] = state["cap"].get(cv2.CAP_PROP_FPS)
+        return not state["fn"](state["ocr"], state["cap"], state["fps"], t0, t1)
+
+    return gap_is_night
 
 
 def filter_cut_bounded_phases(phases, timestamps, diffs, cut_thresh=CUT_THRESH):
@@ -383,9 +445,16 @@ def analyze_night_phases(video_path, num_workers=0):
     print(f"  Found {len(clusters)} red cluster(s)")
 
     phases = merge_clusters(clusters, timestamps, ratios, diffs)
+    phases = merge_by_day_evidence(phases, _make_gap_checker(video_path, clusters))
 
-    # Filter phases bounded by camera cuts on both sides (not real transitions)
-    phases = filter_cut_bounded_phases(phases, timestamps, diffs)
+    # Filter phases bounded by camera cuts on both sides (not real transitions).
+    # A phase assembled from several red bursts is a real night whose outer
+    # bursts happen to begin/end on cuts, so it is exempt.
+    def _n_clusters(s, e):
+        return sum(1 for cs, ce in clusters if cs >= s and ce <= e)
+    multi = [(s, e) for s, e in phases if _n_clusters(s, e) >= 3]
+    single = [(s, e) for s, e in phases if _n_clusters(s, e) < 3]
+    phases = sorted(filter_cut_bounded_phases(single, timestamps, diffs) + multi)
 
     # Filter by minimum duration
     phases = [(s, e) for s, e in phases if e - s >= MIN_PHASE_DURATION]

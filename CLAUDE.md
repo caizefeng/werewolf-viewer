@@ -144,26 +144,45 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Computes frame-to-frame pixel diff (`cv2.absdiff`, mean) to distinguish:
   - Real day/night transitions: small diff (~20-30), same scene with lighting change
   - Camera cuts (close-up ↔ table): large diff (~60-80), different scene
-- Pipeline: find_red_clusters → merge_clusters → filter_cut_bounded_phases → filter by min duration (35s) → **refine_boundaries** → add buffers
+- Pipeline: find_red_clusters → merge_clusters → **merge_by_day_evidence** → filter_cut_bounded_phases → filter by min duration (35s) → **refine_boundaries** → add buffers
 - **refine_boundaries**: a raw boundary from the 2s grid is only known to within one interval, which
   made the overlay lead vary between ~1s and ~4s. Each boundary window — (start−2s, start] for red-on,
   [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding
   sequentially (`_scan_window`), so buffers apply to the actual light transition. Output times are
   floats (2 decimals). Buffers: `ENTRY_BUFFER=2.0` before red-on, `EXIT_BUFFER=1.0` after red-off
 - **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps.
-- **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases
-- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
+- **merge_by_day_evidence** (second pass, S23+): newer seasons cut away from the red table for
+  over a minute at a time during a night (the wolves' masked close-ups, the night graphic), so a
+  night arrives as 14-60s red bursts that neither rule above reconnects, and each burst then dies
+  to the 35s minimum (S23E24G1's first night was missed entirely; its second night was split).
+  Day evidence = the player sidebar being on screen: it is visible throughout the day and never
+  inside a night. Two substantial bursts (>= MIN_EVIDENCE_FRAGMENT=6s) at most MAX_EVIDENCE_GAP=300s
+  apart are joined if no sidebar sighting lies between them. Sightings come from
+  analyze_names.sidebar_visible (OCR of the narrow role-column strips, >= 3 role/未知 labels) sampled
+  every 10s inside candidate gaps only, so OCR is loaded lazily and only runs for a few minutes of
+  video (_make_gap_checker). Tiny flashes (a red costume in a close-up) neither extend a night nor
+  break a chain. Boundaries stay red-light based (refined), never extended by evidence
+- **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases. Phases assembled from >= 3 bursts are exempt (a real night whose outer bursts begin/end on cuts)
+- Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_EVIDENCE_GAP=300`, `MIN_EVIDENCE_FRAGMENT=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
 - Performance: ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead)
 
 ### Name Mask Detection (analyze_names.py)
-- Uses PaddleOCR (PP-OCRv5 server det+rec) to find Chinese role names (狼人, 预言家, 女巫, etc.)
+- Uses PaddleOCR **PP-OCRv6 medium** det+rec (paddleocr 3.7.0) to find Chinese role names (狼人,
+  预言家, 女巫, etc.). Chosen 2026-10 by benchmark on 72 verified vertical role labels + 18 未知
+  labels: v6 medium 69/72, v5 server (previous) 68/72, v5 mobile 59/72, all zero false roles; v6 is
+  the smaller/faster model. Apple Vision cannot read the vertical labels (0/72). Model names live in
+  OCR_DET_MODEL / OCR_REC_MODEL; _ensure_models downloads them into processing/models/ on first use
 - Left + right edge crops are OCR'd in a **single batched `predict()` call** per frame
 - Sets `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` at import (offline-safe, faster init)
 - **Local models**: weights stored in `processing/models/` (self-contained, no global cache dependency)
 - **No aux models**: doc orientation, unwarping, textline orientation disabled (designed for scanned docs, hurt video frame detection)
 - **Device fallback**: uses CUDA GPU if available, falls back to CPU (PaddlePaddle has no Apple MPS support)
-- Scans left/right 20% edges of frames sampled from **1100s-1400s** (shifted from 1000-1300 for better generalizability)
-- **Extended scan**: if one side is missing after primary range, extends to 1400s-2000s at 30s intervals
+- **Sidebar probes first** (probe_sidebar): OCR at 15/25/35/50/65/80/90% of the video. They decide
+  hidden-roles broadcasts (>= 2 probes showing >= 2 未知) and pick the role-scan window: it starts
+  60s before the first probe showing >= 4 role labels (games reach the sidebar at different times —
+  S23E24G2 showed an intermission screen through the old fixed 1100-1400s window), falling back to
+  1100s. The window is 300s at 10s intervals; extended scans cover the next 600s at 30s
+- **Extended scan**: if one side is missing after the primary window, extends over the next 600s at 30s intervals
 - **Lazy generator**: `sample_frames` yields frames on demand, stops reading when enough names found (typically ~4 frames instead of 30)
 - **Exact-match only** (`text.strip() == role`): the role column shows the bare role name, while
   players' public notes ("没平民", "跳狼人") and the watermark contain role words too. Substring
@@ -190,16 +209,16 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   centered in the role column that isn't an exact role is a misread label (notes sit inward,
   badges outward), snapped by containment or edit distance 1 (械狼->机械狼, 狼人学->狼人,
   自神->白神). 未知 never snaps. Without this a misread row vanished from the role map
-- **Close-vision games**: the broadcast shows 未知 instead of a role until it is revealed in-game,
+- **Hidden-roles broadcasts**: the broadcast shows 未知 instead of a role until it is revealed in-game,
   so the audience is already blind. _scan_range counts frames with >=2 未知 labels; >=2 such
-  frames -> close_vision=True in metadata.json (extended scans skipped; the scan also stops
+  frames -> hidden_roles=True in metadata.json (extended scans skipped; the scan also stops
   early after 3 such frames with no roles). The viewer then starts with masks/overlay OFF
   (toggle still works as an override), badges the video in the library, and the role panel
   shows an explanation instead of rows. Titles don't mark these games; detection is purely from
-  the sidebar labels and is unit-tested but not yet confirmed on a real close-vision video
+  the sidebar labels and is unit-tested but not yet confirmed on a real hidden-roles video
 - Raw OCR goes through ocr_items_in_frame (edge_ratio 0.30) -> _roles_from_items;
   detect_names_in_frame is a thin wrapper. analyze_name_regions_full() returns {name_masks,
-  role_map, close_vision} (what analyze.py writes); analyze_name_regions() still returns masks only
+  role_map, hidden_roles} (what analyze.py writes); analyze_name_regions() still returns masks only
 
 ### Pipeline Parallelism (analyze.py)
 - Default: runs night + name detection in **separate processes** (subprocess for name detection)
@@ -228,8 +247,8 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
     'blend in' as that role; once revealed the row shows which seat it was
   Clicking a WOLF (any role containing 狼) reveals/hides the whole wolf team in either mode,
   mimicking playing as a wolf who knows the pack. Blind/All buttons; the revealed set persists per
-  video. Needs a role map (re-analyze older videos). Close-vision games show an explanation only
-- Masks default ON for every loaded video (spoiler-safe), OFF for close-vision games; the toggle
+  video. Needs a role map (re-analyze older videos). Hidden-roles broadcasts show an explanation only
+- Masks default ON for every loaded video (spoiler-safe), OFF for hidden-roles broadcasts; the toggle
   is a per-video override. With no detected night phases masks stay on throughout (a detection
   failure must not leak)
 - **Mute button** beside the volume slider; volume/mute persist per browser
@@ -261,7 +280,7 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s, N=next night start, Shift+N=previous
 
 ## API Endpoints (vite.config.js middleware)
-- `GET /api/videos` - list videos with metadata.json (`closeVision` flag included for the library badge)
+- `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag included for the library badge)
 - `GET /api/downloaded` - list all video dirs with hasVideo/hasMetadata flags
 - `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}). Merges two
   sources, deduped by id, both filtered by all query keywords: (1) the 200 most recent
@@ -342,3 +361,12 @@ All 9 videos below achieve 100% detection accuracy (0 FP, 0 miss), re-validated 
 ### Jnf_dLaVNMU
 - 11:44 -- 15:14
 - 42:46 -- 47:00
+
+### S23 test set (2026-10, generated by frame inspection; S23 nights are cut-heavy)
+S23 broadcasts intercut nights with the wolves' masked close-ups and a night graphic, overlay a
+transient (~6s) "天黑请闭眼" banner at night start, and hide the sidebar for the whole night. Ground
+truth below was established by reading the red-light transitions and the sidebar frame by frame.
+- xNDz6SStaLo (S23E24 第一局): 9:17 -- 13:13, 1:00:38 -- 1:05:55 (role map 12/12 verified)
+- QNxo5hmWLN0 (S23E24 第二局, hidden-roles): 7:03 -- 9:46, 1:28:33 -- 1:35:07
+- (S23E24 第三局 pZ0vo8VRDkA, S23E25 第一局 bzsBWNpIwpo, 第二局 fgw-4eUV0JE, 第三局 HpIM5xTU-t8:
+  see benchmark.py GROUND_TRUTH once audited)

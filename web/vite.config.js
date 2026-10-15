@@ -182,12 +182,12 @@ export default defineConfig({
                       title = info.title || d.name;
                     } catch {}
                   }
-                  let closeVision = false;
+                  let hiddenRoles = false;
                   try {
                     const meta = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf-8"));
-                    closeVision = !!meta.close_vision;
+                    hiddenRoles = !!meta.hidden_roles;
                   } catch {}
-                  return { id: d.name, title, closeVision };
+                  return { id: d.name, title, hiddenRoles };
                 });
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify(dirs));

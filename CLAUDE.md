@@ -322,12 +322,27 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Fullscreen via Fullscreen API on wrapper element
 - Sidebar with two tabs: video list + download management
 - Download management: search YouTube, download+process, stop, delete
+- **Several jobs at once** (since 2026-10-15): every search row has its own Download/Stop button and
+  progress bars, and ↻ re-analyze can run on several library rows. The server keeps a job per video
+  (one job per video at a time) and a FIFO queue with separate slot limits: `MAX_DOWNLOADS=3`
+  (network-bound) and `MAX_ANALYSES=2` (each analysis is ~4-5 cores: 3 scan threads + an OCR
+  subprocess); override with env `WEREWOLF_MAX_DOWNLOADS` / `WEREWOLF_MAX_ANALYSES` before
+  `scripts/start.sh`. Phases: download jobs go queued → downloading → waiting → processing → done,
+  analyze jobs start at waiting; rows show "queued #n" while a job waits for a slot. The front end
+  runs ONE poller (`pollJobs`, 2s) for all jobs and stops it when none is active; a library row
+  with a running job gets `.busy` (spinning ↻, ↻ and × disabled); finishing a job refreshes the
+  library and reloads the open video's metadata if it was re-analyzed. Elapsed times come from the
+  server as durations (`phaseElapsedMs`), so LAN clients with a different clock show correct timers.
+  Deleting a video with a running job is refused (409); stop it first.
+- **Editing vite.config.js restarts the dev server** (Vite watches it): in-memory jobs are lost, and
+  although the detached download/analysis processes keep running, nothing starts the analysis
+  after an orphaned download finishes. Check `/api/job-status` AND `videos/*/*.part` before
+  touching vite.config.js while someone may be using the app
 - Library items have a ↻ **Re-analyze** button (`POST /api/analyze`): re-runs analyze.py on the
   downloaded video (e.g. after detection improvements) and reloads metadata if that video is open.
   Replaces manual edits (confirm dialog)
 - Info bar shows the open video's title (also set as the document title)
 - Volume and user mute are remembered per browser (localStorage); the night auto-mute is never persisted
-  - Stop during download deletes the partial dir; stop during analysis keeps the video
 - Time display shows h:mm:ss above one hour
 - Mute button (🔊/🔇) beside the volume slider. `userMuted` tracks a deliberate mute
   separately from the night auto-mute: dawn only unmutes if the user didn't mute, and
@@ -343,11 +358,11 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   (2) the channel search tab `@JCDSS/search?query=…` — finds older episodes that have
   aged out of the recent window (the channel posts ~3 games/day, so 200 uploads ≈ 2 months;
   this is why S22E39/S22E41 returned "no results" in 2026-10 before source 2 was added)
-- `POST /api/download` - start download+process job (body: {videoId})
-- `POST /api/analyze` - re-run analysis on a downloaded video (body: {videoId}); 404 if no video.mp4, 409 if a job is running
-- `GET /api/job-status` - poll active job status (`kind`: "download" | "analyze")
-- `POST /api/stop` - stop active job (deletes dir only if still downloading)
-- `POST /api/delete` - delete video dir (body: {videoId})
+- `POST /api/download` - queue a download+process job (body: {videoId}); 409 if that video already has a running job. Returns `{started, videoId, phase}`
+- `POST /api/analyze` - queue a re-analysis of a downloaded video (body: {videoId}); 404 if no video.mp4, 409 if that video already has a running job
+- `GET /api/job-status` - `{jobs: [...], active: n, limits: {downloads, analyses}}`; each job: `{videoId, kind: "download"|"analyze", phase: queued|downloading|waiting|processing|done, active, done, error, stopped, phaseElapsedMs, timings: {download, analysis} (ms), queuePosition}`. Finished jobs stay listed for 10 min
+- `POST /api/stop` - stop one job (body: {videoId}); a stop while queued/downloading deletes the partial dir, a stop during analysis keeps the download
+- `POST /api/delete` - delete video dir (body: {videoId}); 409 while a job runs for it
 - `POST /api/metadata` - persist edited night_phases/name_masks to metadata.json (body: {videoId, night_phases, name_masks}); preserves originals in original_* fields
 - metadata.json also carries `role_map` (per-player role/number/name/y-band) from analysis, read by the role-reveal panel
 - `GET /<videoId>/*` - serve files from ../videos/

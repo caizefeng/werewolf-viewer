@@ -96,6 +96,9 @@ async function loadVideoList() {
       list.appendChild(li);
     }
 
+    // Rows whose video has a running job show it (spinner, disabled buttons)
+    applyJobStates();
+
     // Auto-select first if none selected
     if (!currentVideoId && videos.length > 0) {
       switchVideo(videos[0].id);
@@ -139,8 +142,6 @@ async function switchVideo(videoId) {
 // ── Download management tab ──
 
 let downloadedSet = new Set(); // video IDs that have metadata
-let jobPollTimer = null;
-let phaseStartTime = null; // client-side timer for active phase
 
 async function refreshDownloadedState() {
   try {
@@ -204,7 +205,7 @@ function renderSearchResults(results) {
       <div class="sr-meta">${formatDuration(r.duration)}</div>
       <div class="sr-actions">
         <button class="sr-btn-dl ${isReady ? "done" : ""}" ${isReady ? "disabled" : ""}
-          data-id="${r.id}">${isReady ? "✓ Done" : "Download"}</button>
+          data-id="${r.id}" data-state="${isReady ? "done" : "idle"}">${isReady ? "✓ Done" : "Download"}</button>
       </div>
       <div class="sr-progress" data-progress-id="${r.id}">
         <div class="progress-step" data-step="download">
@@ -222,10 +223,8 @@ function renderSearchResults(results) {
     list.appendChild(li);
   }
 
-  // Bind download buttons
-  list.querySelectorAll(".sr-btn-dl:not(.done)").forEach((btn) => {
-    btn.addEventListener("click", () => startDownload(btn.dataset.id));
-  });
+  // Rows of videos with a running or recently finished job show that state
+  applyJobStates();
 }
 
 function escapeHtml(str) {
@@ -250,9 +249,7 @@ function showProgress(videoId) {
   el.classList.add("visible");
   el.querySelectorAll(".step-fill").forEach((f) => (f.className = "step-fill"));
   el.querySelectorAll(".step-time").forEach((t) => (t.textContent = ""));
-  // Clear any previous error message
-  const existing = el.querySelector(".sr-error-msg");
-  if (existing) existing.remove();
+  clearErrorMessage(videoId);
 }
 
 function setStepState(videoId, stepName, state, timeText) {
@@ -264,181 +261,258 @@ function setStepState(videoId, stepName, state, timeText) {
   if (timeText !== undefined) step.querySelector(".step-time").textContent = timeText;
 }
 
-function showErrorMessage(videoId, message) {
+function clearErrorMessage(videoId) {
+  const existing = getProgressEl(videoId)?.querySelector(".sr-error-msg");
+  if (existing) existing.remove();
+}
+
+function showErrorMessage(videoId, message, hint) {
   const el = getProgressEl(videoId);
   if (!el) return;
-  // Remove any existing error message
-  const existing = el.querySelector(".sr-error-msg");
-  if (existing) existing.remove();
-  // Add error message below progress bars
+  clearErrorMessage(videoId);
   const msgEl = document.createElement("div");
   msgEl.className = "sr-error-msg";
   const errorText = document.createElement("div");
   errorText.className = "sr-error-text";
   errorText.textContent = message;
-  const hint = document.createElement("div");
-  hint.className = "sr-error-hint";
-  hint.textContent = "YouTube may be limiting format access. Try again in a few minutes.";
   msgEl.appendChild(errorText);
-  msgEl.appendChild(hint);
+  if (hint) {
+    const hintEl = document.createElement("div");
+    hintEl.className = "sr-error-hint";
+    hintEl.textContent = hint;
+    msgEl.appendChild(hintEl);
+  }
   el.appendChild(msgEl);
 }
 
-async function startDownload(videoId) {
-  try {
-    const res = await fetch("/api/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ videoId }),
-    });
-    const data = await res.json();
-    if (data.error) {
-      showProgress(videoId);
-      setStepState(videoId, "download", "error", "");
-      return;
-    }
-  } catch {
-    showProgress(videoId);
-    setStepState(videoId, "download", "error", "");
-    return;
-  }
+const DOWNLOAD_HINT = "YouTube may be limiting format access. Try again in a few minutes.";
 
-  // Update button to running state
-  updateButtonState(videoId, "running");
-
-  // Show progress bars, start download timer
-  showProgress(videoId);
-  setStepState(videoId, "download", "active", "0s");
-  phaseStartTime = Date.now();
-
-  // Start polling job status
-  startJobPolling(videoId);
-}
-
+// The search-row button: Download / Stop / Retry / ✓ Done. One delegated
+// click handler (bound in init) reads data-state, so rows never rebind.
 function updateButtonState(videoId, state) {
   const btn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
-  if (!btn) return;
-
+  if (!btn || btn.dataset.state === state) return;
+  btn.dataset.state = state;
   btn.className = "sr-btn-dl";
+  btn.disabled = false;
   if (state === "running") {
     btn.classList.add("running");
     btn.textContent = "Stop";
-    btn.disabled = false;
-    // Rebind to stop
-    btn.replaceWith(btn.cloneNode(true));
-    const newBtn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
-    newBtn.addEventListener("click", () => stopJob());
   } else if (state === "done") {
     btn.classList.add("done");
     btn.textContent = "✓ Done";
     btn.disabled = true;
   } else if (state === "error") {
     btn.textContent = "Retry";
-    btn.disabled = false;
-    btn.replaceWith(btn.cloneNode(true));
-    const newBtn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
-    newBtn.addEventListener("click", () => startDownload(videoId));
-  } else if (state === "stopped") {
+  } else {
     btn.textContent = "Download";
-    btn.disabled = false;
-    btn.replaceWith(btn.cloneNode(true));
-    const newBtn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
-    newBtn.addEventListener("click", () => startDownload(videoId));
   }
 }
 
-let lastPhase = null;
-let elapsedTickTimer = null;
-let activeJobVideoId = null;
-let activeStepName = null;
-
-function startElapsedTicker() {
-  if (elapsedTickTimer) clearInterval(elapsedTickTimer);
-  elapsedTickTimer = setInterval(() => {
-    if (phaseStartTime && activeJobVideoId && activeStepName) {
-      const el = getProgressEl(activeJobVideoId);
-      if (!el) return;
-      const step = el.querySelector(`[data-step="${activeStepName}"]`);
-      if (step) step.querySelector(".step-time").textContent = formatElapsed(Date.now() - phaseStartTime);
-    }
-  }, 500);
-}
-
-function stopElapsedTicker() {
-  if (elapsedTickTimer) {
-    clearInterval(elapsedTickTimer);
-    elapsedTickTimer = null;
-  }
-}
-
-function startJobPolling(videoId, initialPhase = "downloading") {
-  if (jobPollTimer) clearInterval(jobPollTimer);
-  lastPhase = initialPhase;
-  activeJobVideoId = videoId;
-  activeStepName = initialPhase === "processing" ? "analysis" : "download";
-
-  startElapsedTicker();
-
-  jobPollTimer = setInterval(async () => {
-    try {
-      const res = await fetch("/api/job-status");
-      const status = await res.json();
-      const vid = status.videoId;
-
-      if (!status.active && status.done) {
-        clearInterval(jobPollTimer);
-        jobPollTimer = null;
-        stopElapsedTicker();
-
-        if (status.stopped) {
-          // User-initiated stop: reset to downloadable state
-          const step = lastPhase === "downloading" ? "download" : "analysis";
-          setStepState(vid, step, "", "");
-          updateButtonState(vid, "stopped");
-        } else if (status.error) {
-          const step = lastPhase === "downloading" ? "download" : "analysis";
-          setStepState(vid, step, "error", "");
-          showErrorMessage(vid, status.error);
-          updateButtonState(vid, "error");
-          if (status.kind === "analyze") {
-            document.getElementById("status").textContent = `Re-analysis failed: ${status.error}`;
-          }
-        } else {
-          const elapsed = formatElapsed(Date.now() - phaseStartTime);
-          setStepState(vid, "analysis", "done", elapsed);
-          updateButtonState(vid, "done");
-          loadVideoList();
-          if (status.kind === "analyze") {
-            document.getElementById("status").textContent = `Re-analysis complete (${elapsed})`;
-            // Pick up the regenerated night phases / masks if this video is open
-            if (vid === currentVideoId) player.loadMetadata(`/${vid}/metadata.json`);
-          }
-        }
-        phaseStartTime = null;
-        lastPhase = null;
-        activeJobVideoId = null;
-        activeStepName = null;
-        return;
-      }
-
-      if (status.active) {
-        if (status.phase === "processing" && lastPhase === "downloading") {
-          const dlElapsed = formatElapsed(Date.now() - phaseStartTime);
-          setStepState(vid, "download", "done", dlElapsed);
-          phaseStartTime = Date.now();
-          setStepState(vid, "analysis", "active", "0s");
-          lastPhase = "processing";
-          activeStepName = "analysis";
-        }
-      }
-    } catch {}
-  }, 2000);
-}
-
-async function stopJob() {
+async function startDownload(videoId) {
+  let data;
   try {
-    await fetch("/api/stop", { method: "POST" });
+    const res = await fetch("/api/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoId }),
+    });
+    data = await res.json();
+  } catch (err) {
+    data = { error: err.message };
+  }
+  if (data.error) {
+    showProgress(videoId);
+    setStepState(videoId, "download", "error", "");
+    showErrorMessage(videoId, data.error);
+    updateButtonState(videoId, "error");
+    return;
+  }
+  // Optimistic row state until the first poll arrives
+  updateButtonState(videoId, "running");
+  showProgress(videoId);
+  setStepState(videoId, "download", "active", data.phase === "queued" ? "queued" : "0s");
+  ensureJobPolling();
+}
+
+async function stopJob(videoId) {
+  try {
+    await fetch("/api/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoId }),
+    });
   } catch {}
+  pollJobs();
+}
+
+// ── Jobs: several videos at once; the server queues beyond its slot limits ──
+
+let jobPollTimer = null;
+let jobTickTimer = null;
+let jobsEverPolled = false;
+const jobSnapshot = new Map(); // videoId -> last job view from /api/job-status
+
+const PHASE_LABEL = {
+  queued: "Queued for download",
+  downloading: "Downloading",
+  waiting: "Queued for analysis",
+  processing: "Analyzing",
+  done: "Done",
+};
+
+function phaseElapsed(job) {
+  return job.phaseElapsedMs + (Date.now() - job.receivedAt);
+}
+
+function queuedText(job) {
+  return job.queuePosition ? `queued #${job.queuePosition}` : "queued";
+}
+
+// Per-step bar state for a job: download (↓) and analysis (⚙)
+function stepStates(job) {
+  const dl = { state: "", time: "" };
+  const an = { state: "", time: "" };
+  if (job.kind === "download") {
+    if (job.phase === "queued") { dl.state = "active"; dl.time = queuedText(job); }
+    else if (job.phase === "downloading") { dl.state = "active"; dl.time = formatElapsed(phaseElapsed(job)); }
+    else if (job.timings.download != null) { dl.state = "done"; dl.time = formatElapsed(job.timings.download); }
+  } else {
+    dl.state = "done";
+  }
+  if (job.phase === "waiting") { an.state = "active"; an.time = queuedText(job); }
+  else if (job.phase === "processing") { an.state = "active"; an.time = formatElapsed(phaseElapsed(job)); }
+  else if (job.timings.analysis != null) { an.state = "done"; an.time = formatElapsed(job.timings.analysis); }
+  if (job.done && job.stopped) {
+    dl.state = ""; dl.time = ""; an.state = ""; an.time = "";
+  } else if (job.done && job.error) {
+    const failed = job.kind === "download" && job.timings.download == null ? dl : an;
+    failed.state = "error";
+    failed.time = "";
+  }
+  return { dl, an };
+}
+
+function statusText(text) {
+  document.getElementById("status").textContent = text;
+}
+
+// Reflect one job in every place it shows: the search row (progress bars +
+// button), the library row (spinner, disabled buttons) and the status line
+// when it is a re-analysis of the open video
+function renderJobRow(job) {
+  const vid = job.videoId;
+  const el = getProgressEl(vid);
+  if (el) {
+    el.classList.add("visible");
+    const { dl, an } = stepStates(job);
+    setStepState(vid, "download", dl.state, dl.time);
+    setStepState(vid, "analysis", an.state, an.time);
+    if (job.done && job.error && !job.stopped) {
+      const failedDownload = job.kind === "download" && job.timings.download == null;
+      showErrorMessage(vid, job.error, failedDownload ? DOWNLOAD_HINT : "See .run/server.log for the full output.");
+    } else {
+      clearErrorMessage(vid);
+    }
+  }
+  updateButtonState(vid, job.done ? (job.stopped ? "idle" : (job.error ? "error" : "done")) : "running");
+
+  const li = document.querySelector(`#video-list li[data-id="${vid}"]`);
+  if (li) {
+    const busy = !job.done;
+    li.classList.toggle("busy", busy);
+    const re = li.querySelector(".video-re-btn");
+    const del = li.querySelector(".video-del-btn:not(.video-re-btn)");
+    if (re) {
+      re.classList.toggle("spinning", busy);
+      re.disabled = busy;
+      re.title = busy ? `${PHASE_LABEL[job.phase] || job.phase}…` : "Re-analyze (re-run night + name detection)";
+    }
+    if (del) {
+      del.disabled = busy;
+      del.title = busy ? "Busy: stop the job first" : "Delete";
+    }
+  }
+
+  if (job.kind === "analyze" && vid === currentVideoId) {
+    if (job.phase === "waiting") statusText(`Re-analysis ${queuedText(job)}…`);
+    else if (job.phase === "processing") statusText(`Re-analyzing (night + name detection)… ${formatElapsed(phaseElapsed(job))}`);
+    else if (job.done && job.stopped) statusText("Re-analysis stopped");
+    else if (job.done && job.error) statusText(`Re-analysis failed: ${job.error}`);
+    else if (job.done) statusText(`Re-analysis complete (${formatElapsed(job.timings.analysis || 0)})`);
+  }
+}
+
+function applyJobStates() {
+  for (const job of jobSnapshot.values()) renderJobRow(job);
+}
+
+async function pollJobs() {
+  let data;
+  try {
+    const res = await fetch("/api/job-status");
+    data = await res.json();
+  } catch {
+    return;
+  }
+  if (!Array.isArray(data.jobs)) return;
+  const now = Date.now();
+  const seen = new Set();
+  const finished = [];
+  for (const job of data.jobs) {
+    job.receivedAt = now;
+    seen.add(job.videoId);
+    const prev = jobSnapshot.get(job.videoId);
+    jobSnapshot.set(job.videoId, job);
+    renderJobRow(job);
+    // A job that ended since the last poll (jobs already over when the page
+    // loaded are not "news")
+    if (job.done && jobsEverPolled && (!prev || !prev.done)) finished.push(job);
+  }
+  for (const id of [...jobSnapshot.keys()]) {
+    if (!seen.has(id)) jobSnapshot.delete(id); // the server has forgotten it
+  }
+  jobsEverPolled = true;
+  for (const job of finished) await onJobFinished(job);
+  if (!data.jobs.some((j) => j.active)) stopJobPolling();
+}
+
+async function onJobFinished(job) {
+  await refreshDownloadedState();
+  await loadVideoList(); // re-renders the library (and re-applies job states)
+  // Pick up regenerated night phases / masks if that video is open
+  if (job.kind === "analyze" && job.videoId === currentVideoId && !job.error && !job.stopped) {
+    player.loadMetadata(`/${job.videoId}/metadata.json`);
+  }
+}
+
+function tickJobTimes() {
+  for (const job of jobSnapshot.values()) {
+    if (job.phase !== "downloading" && job.phase !== "processing") continue;
+    const t = formatElapsed(phaseElapsed(job));
+    const el = getProgressEl(job.videoId);
+    if (el) {
+      const step = el.querySelector(`[data-step="${job.phase === "downloading" ? "download" : "analysis"}"] .step-time`);
+      if (step) step.textContent = t;
+    }
+    if (job.kind === "analyze" && job.phase === "processing" && job.videoId === currentVideoId) {
+      statusText(`Re-analyzing (night + name detection)… ${t}`);
+    }
+  }
+}
+
+function ensureJobPolling() {
+  if (jobPollTimer) return;
+  jobPollTimer = setInterval(pollJobs, 2000);
+  jobTickTimer = setInterval(tickJobTimes, 500);
+  pollJobs();
+}
+
+function stopJobPolling() {
+  clearInterval(jobPollTimer);
+  clearInterval(jobTickTimer);
+  jobPollTimer = null;
+  jobTickTimer = null;
 }
 
 async function reanalyzeVideo(videoId) {
@@ -454,9 +528,10 @@ async function reanalyzeVideo(videoId) {
       alert(`Re-analyze failed: ${data.error}`);
       return;
     }
-    document.getElementById("status").textContent = "Re-analyzing (night + name detection)…";
-    phaseStartTime = Date.now();
-    startJobPolling(videoId, "processing");
+    if (videoId === currentVideoId) {
+      statusText(data.phase === "processing" ? "Re-analyzing (night + name detection)…" : "Re-analysis queued…");
+    }
+    ensureJobPolling();
   } catch (err) {
     alert(`Re-analyze failed: ${err.message}`);
   }
@@ -472,6 +547,10 @@ async function deleteVideo(videoId) {
       body: JSON.stringify({ videoId }),
     });
     const data = await res.json();
+    if (data.error) {
+      alert(`Delete failed: ${data.error}`);
+      return;
+    }
     if (data.deleted) {
       // If currently playing this video, clear player
       if (currentVideoId === videoId) {
@@ -484,18 +563,11 @@ async function deleteVideo(videoId) {
         document.getElementById("video-title").textContent = "";
         document.title = "Werewolf Viewer";
       }
+      jobSnapshot.delete(videoId);
       await refreshDownloadedState();
       loadVideoList();
-      // Update search result download button
-      const dlBtn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
-      if (dlBtn) {
-        dlBtn.className = "sr-btn-dl";
-        dlBtn.textContent = "Download";
-        dlBtn.disabled = false;
-        dlBtn.replaceWith(dlBtn.cloneNode(true));
-        const newBtn = document.querySelector(`.sr-btn-dl[data-id="${videoId}"]`);
-        newBtn.addEventListener("click", () => startDownload(videoId));
-      }
+      // The search result (if shown) becomes downloadable again
+      updateButtonState(videoId, "idle");
     }
   } catch (err) {
     alert(`Delete failed: ${err.message}`);
@@ -519,16 +591,16 @@ async function init() {
     if (e.key === "Enter") doSearch();
   });
 
-  // Check if there's an active job (page reload)
-  try {
-    const res = await fetch("/api/job-status");
-    const status = await res.json();
-    if (status.active) {
-      phaseStartTime = status.phaseStartedAt || Date.now();
-      startJobPolling(status.videoId, status.phase === "processing" ? "processing" : "downloading");
-      if (status.kind === "analyze") document.getElementById("status").textContent = "Re-analyzing (night + name detection)…";
-    }
-  } catch {}
+  // Search-row buttons: Download/Retry start a job, Stop ends one
+  document.getElementById("search-results").addEventListener("click", (e) => {
+    const btn = e.target.closest(".sr-btn-dl");
+    if (!btn || btn.disabled) return;
+    if (btn.dataset.state === "running") stopJob(btn.dataset.id);
+    else startDownload(btn.dataset.id);
+  });
+
+  // Pick up jobs already running (page reload); polling stops itself when idle
+  ensureJobPolling();
 }
 
 init();

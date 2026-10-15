@@ -478,6 +478,28 @@ header h1::after {
   background: var(--accent-dim);
 }
 
+/* A library row whose video has a running job: the ↻ spins and stays
+   visible; ↻ and × are disabled until the job ends or is stopped */
+#video-list li.busy .video-re-btn {
+  opacity: 1;
+  color: var(--dawn-gold);
+}
+
+.video-re-btn.spinning {
+  animation: re-spin 1.2s linear infinite;
+}
+
+.video-del-btn:disabled {
+  cursor: not-allowed;
+  color: var(--text-muted);
+  border-color: transparent;
+  background: transparent;
+}
+
+@keyframes re-spin {
+  to { transform: rotate(360deg); }
+}
+
 #video-list li:hover {
   background: rgba(255, 255, 255, 0.025);
   color: var(--text-secondary);

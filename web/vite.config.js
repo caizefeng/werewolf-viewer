@@ -10,8 +10,17 @@ const venvPython = path.join(processingDir, "venv", "bin", "python3");
 const venvYtDlp = path.join(processingDir, "venv", "bin", "yt-dlp");
 const ytDlpBin = fs.existsSync(venvYtDlp) ? venvYtDlp : "yt-dlp";
 
-// Track active download/process jobs: { videoId, proc, phase, log }
-let activeJob = null;
+// ── Jobs ──
+// One job per video at a time, several videos at once. A download job runs
+// download.py then analyze.py; an analyze job runs analyze.py only. Jobs
+// wait in a FIFO queue for a slot: downloads are network-bound, analyses
+// CPU-bound (3 scan threads + an OCR subprocess each, ~4-5 cores), so each
+// has its own limit (override with WEREWOLF_MAX_DOWNLOADS / _ANALYSES).
+// Finished jobs stay listed for a while so a polling client sees the end.
+const MAX_DOWNLOADS = Math.max(1, parseInt(process.env.WEREWOLF_MAX_DOWNLOADS, 10) || 3);
+const MAX_ANALYSES = Math.max(1, parseInt(process.env.WEREWOLF_MAX_ANALYSES, 10) || 2);
+const JOB_RETENTION_MS = 10 * 60 * 1000;
+const jobs = new Map(); // videoId -> job
 
 // Cached channel upload list for /api/search (the yt-dlp fetch takes seconds)
 let channelCache = { fetchedAt: 0, videos: null };
@@ -68,42 +77,152 @@ function errorTail(log) {
   return (errors.length ? errors : lines).slice(-3).join("\n").trim();
 }
 
-// Spawn analyze.py for activeJob.videoId: phase 2 of a download job, or a
-// standalone re-analysis via /api/analyze. Caller has set activeJob.
-function startAnalysis(videoId) {
-  activeJob.phase = "processing";
-  activeJob.phaseStartedAt = Date.now();
-  activeJob.log.push("--- Starting analysis ---\n");
-  const anProc = spawn(venvPython, [
-    path.join(processingDir, "analyze.py"),
-    `--video-id=${videoId}`,
-  ], {
+// Phases: download jobs go queued -> downloading -> waiting -> processing ->
+// done; analyze jobs start at waiting. phaseStartedAt restarts per phase.
+function newJob(videoId, kind) {
+  const now = Date.now();
+  return {
+    videoId, kind, proc: null, log: [],
+    phase: kind === "download" ? "queued" : "waiting",
+    done: false, error: null, stopped: false,
+    createdAt: now, phaseStartedAt: now, finishedAt: null,
+    timings: { download: null, analysis: null },
+  };
+}
+
+function setPhase(job, phase) {
+  job.phase = phase;
+  job.phaseStartedAt = Date.now();
+}
+
+// A job's process callbacks only count while the job is still the live
+// entry for its video (a stop or a replacement makes them stale)
+function isCurrent(job) {
+  return jobs.get(job.videoId) === job && !job.done;
+}
+
+function finishJob(job, error) {
+  if (job.done) return;
+  job.error = error || null;
+  job.done = true;
+  job.proc = null;
+  job.finishedAt = Date.now();
+  setPhase(job, "done");
+  scheduleJobs();
+}
+
+// Spawn a processing script for a job in its own process group (so a stop
+// can kill python and its yt-dlp/analyze children together), collecting
+// output into the job log.
+function spawnForJob(job, args, onClose) {
+  const proc = spawn(venvPython, args, {
     cwd: processingDir,
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
-  activeJob.proc = anProc;
-
-  anProc.stdout.on("data", (d) => activeJob.log.push(d.toString()));
-  anProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
-
-  anProc.on("error", (err) => {
-    if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
-    activeJob.error = `Failed to start analysis: ${err.message}`;
-    activeJob.phase = "done";
-    activeJob.done = true;
-    activeJob.proc = null;
+  job.proc = proc;
+  proc.stdout.on("data", (d) => job.log.push(d.toString()));
+  proc.stderr.on("data", (d) => job.log.push(d.toString()));
+  proc.on("error", (err) => {
+    if (isCurrent(job)) finishJob(job, `Failed to start ${path.basename(args[0])}: ${err.message}`);
   });
+  proc.on("close", (code) => {
+    if (isCurrent(job)) onClose(code);
+  });
+}
 
-  anProc.on("close", (code2) => {
-    if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
-    if (code2 !== 0) {
-      activeJob.error = errorTail(activeJob.log) || `Analysis failed (exit ${code2})`;
+function runDownload(job) {
+  setPhase(job, "downloading");
+  spawnForJob(job, [
+    path.join(processingDir, "download.py"),
+    `--video-id=${job.videoId}`, "--quality=1080",
+    "--output-dir", path.join(videosDir, job.videoId),
+  ], (code) => {
+    if (code !== 0) return finishJob(job, errorTail(job.log) || `Download failed (exit ${code})`);
+    job.timings.download = Date.now() - job.phaseStartedAt;
+    setPhase(job, "waiting");
+    scheduleJobs();
+  });
+}
+
+function runAnalysis(job) {
+  setPhase(job, "processing");
+  job.log.push("--- Starting analysis ---\n");
+  spawnForJob(job, [
+    path.join(processingDir, "analyze.py"),
+    `--video-id=${job.videoId}`,
+  ], (code) => {
+    if (code !== 0) return finishJob(job, errorTail(job.log) || `Analysis failed (exit ${code})`);
+    job.timings.analysis = Date.now() - job.phaseStartedAt;
+    finishJob(job, null);
+  });
+}
+
+function pruneJobs() {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (job.done && now - job.finishedAt > JOB_RETENTION_MS) jobs.delete(id);
+  }
+}
+
+function sortedJobs() {
+  return [...jobs.values()].sort((a, b) => a.createdAt - b.createdAt);
+}
+
+// Start waiting jobs while slots are free, oldest first
+function scheduleJobs() {
+  pruneJobs();
+  const all = sortedJobs();
+  let downloads = all.filter((j) => j.phase === "downloading").length;
+  let analyses = all.filter((j) => j.phase === "processing").length;
+  for (const job of all) {
+    if (job.phase === "queued" && downloads < MAX_DOWNLOADS) {
+      downloads++;
+      runDownload(job);
+    } else if (job.phase === "waiting" && analyses < MAX_ANALYSES) {
+      analyses++;
+      runAnalysis(job);
     }
-    activeJob.phase = "done";
-    activeJob.done = true;
-    activeJob.proc = null;
-  });
+  }
+}
+
+// What /api/job-status reports per job. Elapsed time is sent as a duration
+// (not a timestamp) so LAN clients with a different clock stay accurate.
+function jobView(job) {
+  const all = sortedJobs();
+  const queued = job.phase === "queued" || job.phase === "waiting";
+  return {
+    videoId: job.videoId,
+    kind: job.kind,
+    phase: job.phase,
+    active: !job.done,
+    done: job.done,
+    error: job.error,
+    stopped: job.stopped,
+    phaseElapsedMs: Date.now() - job.phaseStartedAt,
+    timings: job.timings,
+    queuePosition: queued
+      ? all.filter((j) => j.phase === job.phase && j.createdAt < job.createdAt).length + 1
+      : null,
+  };
+}
+
+function stopJob(job) {
+  if (job.done) return false;
+  if (job.proc) {
+    // Kill the whole process group (python + yt-dlp/analyze subprocesses)
+    try { process.kill(-job.proc.pid, "SIGTERM"); } catch {}
+  }
+  // A stop while downloading discards the partial directory. A stop during
+  // (or while waiting for) analysis keeps the expensive finished download;
+  // re-running analysis is cheap.
+  if (job.phase === "queued" || job.phase === "downloading") {
+    const jobDir = path.join(videosDir, job.videoId);
+    if (fs.existsSync(jobDir)) fs.rmSync(jobDir, { recursive: true, force: true });
+  }
+  job.stopped = true;
+  finishJob(job, "Stopped by user");
+  return true;
 }
 
 // Browsers attach an Origin header to cross-site POSTs (including
@@ -242,54 +361,19 @@ export default defineConfig({
             return jsonResponse(res, 200, results);
           }
 
-          // API: start download + process
+          // API: start download + process (queued when the download slots are busy)
           if (url === "/api/download" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
             const body = await readBody(req, res);
             if (!body) return;
             const { videoId } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
-            if (activeJob && !activeJob.done) return jsonResponse(res, 409, { error: "A job is already running", jobVideoId: activeJob.videoId });
-
-            const outputDir = path.join(videosDir, videoId);
-            activeJob = { videoId, proc: null, phase: "downloading", log: [], done: false, error: null, phaseStartedAt: Date.now() };
-
-            // Phase 1: Download
-            const dlArgs = [
-              path.join(processingDir, "download.py"),
-              `--video-id=${videoId}`, "--quality=1080",
-              "--output-dir", outputDir,
-            ];
-            const dlProc = spawn(venvPython, dlArgs, {
-              cwd: processingDir,
-              stdio: ["ignore", "pipe", "pipe"],
-              detached: true,
-            });
-            activeJob.proc = dlProc;
-
-            dlProc.stdout.on("data", (d) => activeJob.log.push(d.toString()));
-            dlProc.stderr.on("data", (d) => activeJob.log.push(d.toString()));
-
-            dlProc.on("error", (err) => {
-              if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
-              activeJob.error = `Failed to start download: ${err.message}`;
-              activeJob.done = true;
-              activeJob.proc = null;
-            });
-
-            dlProc.on("close", (code) => {
-              if (!activeJob || activeJob.videoId !== videoId || activeJob.done) return;
-              if (code !== 0) {
-                activeJob.error = errorTail(activeJob.log) || `Download failed (exit ${code})`;
-                activeJob.done = true;
-                activeJob.proc = null;
-                return;
-              }
-
-              startAnalysis(videoId);
-            });
-
-            return jsonResponse(res, 200, { started: true, videoId });
+            const existing = jobs.get(videoId);
+            if (existing && !existing.done) return jsonResponse(res, 409, { error: "A job for this video is already running", phase: existing.phase });
+            const job = newJob(videoId, "download");
+            jobs.set(videoId, job);
+            scheduleJobs();
+            return jsonResponse(res, 200, { started: true, videoId, phase: job.phase });
           }
 
           // API: re-run analysis on an already-downloaded video (e.g. after
@@ -300,50 +384,35 @@ export default defineConfig({
             if (!body) return;
             const { videoId } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
-            if (activeJob && !activeJob.done) return jsonResponse(res, 409, { error: "A job is already running", jobVideoId: activeJob.videoId });
+            const existing = jobs.get(videoId);
+            if (existing && !existing.done) return jsonResponse(res, 409, { error: "A job for this video is already running", phase: existing.phase });
             if (!fs.existsSync(path.join(videosDir, videoId, "video.mp4"))) return jsonResponse(res, 404, { error: "Video not downloaded" });
-            activeJob = { videoId, kind: "analyze", proc: null, phase: "processing", log: [], done: false, error: null, phaseStartedAt: Date.now() };
-            startAnalysis(videoId);
-            return jsonResponse(res, 200, { started: true, videoId });
+            const job = newJob(videoId, "analyze");
+            jobs.set(videoId, job);
+            scheduleJobs();
+            return jsonResponse(res, 200, { started: true, videoId, phase: job.phase });
           }
 
-          // API: job status
+          // API: status of every job (running, queued, recently finished)
           if (url === "/api/job-status") {
-            if (!activeJob) return jsonResponse(res, 200, { active: false });
+            pruneJobs();
+            const list = sortedJobs().map(jobView);
             return jsonResponse(res, 200, {
-              active: !activeJob.done,
-              videoId: activeJob.videoId,
-              kind: activeJob.kind || "download",
-              phase: activeJob.phase,
-              done: activeJob.done,
-              error: activeJob.error,
-              stopped: activeJob.stopped || false,
-              phaseStartedAt: activeJob.phaseStartedAt,
+              jobs: list,
+              active: list.filter((j) => j.active).length,
+              limits: { downloads: MAX_DOWNLOADS, analyses: MAX_ANALYSES },
             });
           }
 
-          // API: stop active job
+          // API: stop one job (body: {videoId})
           if (url === "/api/stop" && req.method === "POST") {
             if (blockCrossOrigin(req, res)) return;
-            if (!activeJob || activeJob.done) return jsonResponse(res, 200, { stopped: false });
-            if (activeJob.proc) {
-              // Kill entire process group (python + yt-dlp/analyze subprocesses)
-              try { process.kill(-activeJob.proc.pid, "SIGTERM"); } catch {}
-            }
-            // Clean up the partial download directory — but only while
-            // downloading. A stop during analysis keeps the (expensive)
-            // finished download; re-running analysis is cheap.
-            if (activeJob.phase === "downloading") {
-              const jobDir = path.join(videosDir, activeJob.videoId);
-              if (fs.existsSync(jobDir)) {
-                fs.rmSync(jobDir, { recursive: true, force: true });
-              }
-            }
-            activeJob.error = "Stopped by user";
-            activeJob.stopped = true;
-            activeJob.done = true;
-            activeJob.proc = null;
-            return jsonResponse(res, 200, { stopped: true });
+            const body = await readBody(req, res);
+            if (!body) return;
+            const { videoId } = body;
+            if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
+            const job = jobs.get(videoId);
+            return jsonResponse(res, 200, { stopped: job ? stopJob(job) : false });
           }
 
           // API: delete a video
@@ -353,6 +422,8 @@ export default defineConfig({
             if (!body) return;
             const { videoId } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
+            const job = jobs.get(videoId);
+            if (job && !job.done) return jsonResponse(res, 409, { error: "A job is running for this video; stop it first" });
             const dir = path.join(videosDir, videoId);
             if (!fs.existsSync(dir)) return jsonResponse(res, 404, { error: "Not found" });
             fs.rmSync(dir, { recursive: true, force: true });

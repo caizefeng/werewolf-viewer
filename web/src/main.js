@@ -34,6 +34,48 @@ function getElements() {
 
 // ── Video list tab ──
 
+// "京城大师赛 S23E26 第四局 机械狼通灵师 261015 狼人杀游戏" ->
+// {episode: "S23E26", game: 4, gameLabel: "第四局", config: "机械狼通灵师", date: "261015"}
+const CN_NUM = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10 };
+function parseTitle(title) {
+  const ep = title.match(/S(\d+)E(\d+)/);
+  if (!ep) return null;
+  const g = title.match(/第(.)局/);
+  const date = title.match(/(?:^|\D)(\d{6})(?!\d)/);
+  let config = "";
+  if (g) {
+    config = title.slice(g.index + g[0].length).replace(/\d{6}/, "").replace(/狼人杀游戏/, "").trim();
+  }
+  return {
+    episode: `S${ep[1]}E${ep[2]}`,
+    game: g ? (CN_NUM[g[1]] || parseInt(g[1], 10) || 0) : 0,
+    gameLabel: g ? g[0] : "",
+    config,
+    date: date ? date[1] : "",
+  };
+}
+
+// 261015 -> 2026-10-15 (the channel dates titles as YYMMDD)
+function formatBroadcastDate(d) {
+  if (!/^\d{6}$/.test(d)) return "";
+  return `20${d.slice(0, 2)}-${d.slice(2, 4)}-${d.slice(4, 6)}`;
+}
+
+const GROUP_KEY = "werewolf.libgroup.";
+function isGroupCollapsed(key) {
+  try { return localStorage.getItem(GROUP_KEY + key) === "1"; } catch { return false; }
+}
+function toggleGroup(key) {
+  const collapsed = !isGroupCollapsed(key);
+  try { localStorage.setItem(GROUP_KEY + key, collapsed ? "1" : "0"); } catch {}
+  const head = document.querySelector(`#video-list li.lib-group[data-group="${key}"]`);
+  if (head) {
+    head.classList.toggle("collapsed", collapsed);
+    head.title = collapsed ? "Expand" : "Collapse";
+  }
+  document.querySelectorAll(`#video-list li.lib-item[data-group="${key}"]`).forEach((li) => li.classList.toggle("hidden", collapsed));
+}
+
 async function loadVideoList() {
   const list = document.getElementById("video-list");
   try {
@@ -52,48 +94,92 @@ async function loadVideoList() {
       return ka.prefix.localeCompare(kb.prefix, "zh") || ka.game - kb.game;
     });
 
+    // Group by episode: one header per SxxEyy (with its broadcast date and
+    // game count), one short row per game. Titles repeat the episode four
+    // times otherwise ("京城大师赛 S23E26 第一局 …" x4)
     list.innerHTML = "";
+    const groups = new Map();
     for (const v of videos) {
-      const li = document.createElement("li");
-      li.dataset.id = v.id;
-      if (v.id === currentVideoId) li.classList.add("active");
-
-      const titleSpan = document.createElement("span");
-      titleSpan.className = "video-title";
-      titleSpan.textContent = v.title;
-
-      const delBtn = document.createElement("button");
-      delBtn.className = "video-del-btn";
-      delBtn.textContent = "×";
-      delBtn.title = "Delete";
-      delBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        deleteVideo(v.id);
-      });
-
-      const reBtn = document.createElement("button");
-      reBtn.className = "video-del-btn video-re-btn";
-      reBtn.textContent = "↻";
-      reBtn.title = "Re-analyze (re-run night + name detection)";
-      reBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        reanalyzeVideo(v.id);
-      });
-
-      li.appendChild(titleSpan);
-      if (v.hiddenRoles) {
-        // The broadcast hides roles itself: masks/reveal are off for this one
-        li.classList.add("hidden-roles");
-        const badge = document.createElement("span");
-        badge.className = "video-badge";
-        badge.textContent = "hidden roles";
-        badge.title = "Hidden-roles broadcast: the show keeps roles as \u672a\u77e5 and reveals them as the game goes; masks and role reveal are off";
-        li.appendChild(badge);
+      const info = parseTitle(v.title);
+      const key = info ? info.episode : "";
+      if (!groups.has(key)) groups.set(key, { key, date: info?.date || "", items: [] });
+      const g = groups.get(key);
+      if (!g.date && info?.date) g.date = info.date;
+      g.items.push({ v, info });
+    }
+    for (const g of groups.values()) {
+      if (g.key) {
+        const head = document.createElement("li");
+        head.className = "lib-group" + (isGroupCollapsed(g.key) ? " collapsed" : "");
+        head.dataset.group = g.key;
+        head.innerHTML = `<span class="lib-group-name"></span><span class="lib-group-date"></span><span class="lib-group-count"></span><span class="lib-group-chev">▾</span>`;
+        head.querySelector(".lib-group-name").textContent = g.key;
+        head.querySelector(".lib-group-date").textContent = formatBroadcastDate(g.date);
+        head.querySelector(".lib-group-count").textContent = `${g.items.length} game${g.items.length === 1 ? "" : "s"}`;
+        head.title = isGroupCollapsed(g.key) ? "Expand" : "Collapse";
+        head.addEventListener("click", () => toggleGroup(g.key));
+        list.appendChild(head);
       }
-      li.appendChild(reBtn);
-      li.appendChild(delBtn);
-      li.addEventListener("click", () => switchVideo(v.id));
-      list.appendChild(li);
+      for (const { v, info } of g.items) {
+        const li = document.createElement("li");
+        li.className = "lib-item";
+        li.dataset.id = v.id;
+        li.dataset.title = v.title;
+        if (g.key) li.dataset.group = g.key;
+        if (g.key && isGroupCollapsed(g.key)) li.classList.add("hidden");
+        if (v.id === currentVideoId) li.classList.add("active");
+
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "video-title";
+        if (info && info.gameLabel) {
+          const game = document.createElement("span");
+          game.className = "lib-game";
+          game.textContent = info.gameLabel;
+          titleSpan.appendChild(game);
+          if (info.config) {
+            const cfg = document.createElement("span");
+            cfg.className = "lib-config";
+            cfg.textContent = info.config;
+            titleSpan.appendChild(cfg);
+          }
+        } else {
+          titleSpan.textContent = info ? v.title.replace(/^京城大师赛\s*/, "").replace(info.episode, "").trim() || v.title : v.title;
+        }
+        titleSpan.title = v.title;
+
+        const delBtn = document.createElement("button");
+        delBtn.className = "video-del-btn";
+        delBtn.textContent = "×";
+        delBtn.title = "Delete";
+        delBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          deleteVideo(v.id);
+        });
+
+        const reBtn = document.createElement("button");
+        reBtn.className = "video-del-btn video-re-btn";
+        reBtn.textContent = "↻";
+        reBtn.title = "Re-analyze (re-run night + name detection)";
+        reBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          reanalyzeVideo(v.id);
+        });
+
+        li.appendChild(titleSpan);
+        if (v.hiddenRoles) {
+          // The broadcast hides roles itself: masks/reveal are off for this one
+          li.classList.add("hidden-roles");
+          const badge = document.createElement("span");
+          badge.className = "video-badge";
+          badge.textContent = "hidden roles";
+          badge.title = "Hidden-roles broadcast: the show keeps roles as \u672a\u77e5 and reveals them as the game goes; masks and role reveal are off";
+          li.appendChild(badge);
+        }
+        li.appendChild(reBtn);
+        li.appendChild(delBtn);
+        li.addEventListener("click", () => switchVideo(v.id));
+        list.appendChild(li);
+      }
     }
 
     // Rows whose video has a running job show it (spinner, disabled buttons)
@@ -124,7 +210,8 @@ async function switchVideo(videoId) {
   video.load();
 
   // Show which video is open
-  const title = document.querySelector(`#video-list li[data-id="${videoId}"] .video-title`)?.textContent || videoId;
+  const row = document.querySelector(`#video-list li[data-id="${videoId}"]`);
+  const title = row?.dataset.title || row?.querySelector(".video-title")?.textContent || videoId;
   document.getElementById("video-title").textContent = title;
   document.title = `${title} – Werewolf Viewer`;
 

@@ -358,6 +358,11 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Library items have a ↻ **Re-analyze** button (`POST /api/analyze`): re-runs analyze.py on the
   downloaded video (e.g. after detection improvements) and reloads metadata if that video is open.
   Replaces manual edits (confirm dialog)
+- **Library grouped by episode** (loadVideoList + parseTitle in main.js): one header per SxxEyy
+  showing the broadcast date (YYMMDD in the title → 20YY-MM-DD) and game count, then one short row
+  per game (第四局 · 机械狼通灵师) with the badge/↻/× controls; headers collapse on click, remembered
+  per browser (werewolf.libgroup.<episode>). Rows keep data-id, and data-title holds the full title
+  for the info bar. Titles without an SxxEyy code are listed ungrouped
 - Info bar shows the open video's title (also set as the document title)
 - **Visual polish pass (2026-10-15, reviewed with headless screenshots at 1600x1000 and 1366x768)**:
   the occasional editing actions (+ Night phase, + Mask, Reset masks/nights) live in an **✎ Edit

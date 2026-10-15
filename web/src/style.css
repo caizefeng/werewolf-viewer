@@ -1524,6 +1524,81 @@ header h1::after {
   color: var(--text-muted);
 }
 
+/* ── Episode groups ── */
+#video-list li.lib-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem 0.35rem;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+#video-list li.lib-group:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.lib-group-name {
+  font-family: "Cinzel", Georgia, serif;
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+}
+
+.lib-group-date {
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+.lib-group-count {
+  margin-left: auto;
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.lib-group-chev {
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  transition: transform 0.2s ease;
+}
+
+#video-list li.lib-group.collapsed .lib-group-chev {
+  transform: rotate(-90deg);
+}
+
+#video-list li.lib-item {
+  padding-left: 1.1rem;
+}
+
+#video-list li.hidden {
+  display: none;
+}
+
+.lib-game {
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-right: 0.45rem;
+}
+
+#video-list li.active .lib-game {
+  color: var(--text-primary);
+}
+
+.lib-config {
+  color: var(--text-tertiary);
+}
+
+#video-list li.active .lib-config {
+  color: var(--text-secondary);
+}
+
 .video-badge {
   grid-area: badge;
   justify-self: start;

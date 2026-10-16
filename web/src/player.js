@@ -686,7 +686,9 @@ export class WerewolfPlayer {
         role.textContent = on ? p.role : "\u2022\u2022\u2022";
         row.appendChild(num);
         row.appendChild(spacer);
-        if (this._isWolf(p.role)) addPaw(row);
+        // The paw (and its "wolf team" tooltip) only once this seat is
+        // revealed: marking wolf seats up front would give the game away
+        if (on && this._isWolf(p.role)) addPaw(row);
         row.appendChild(role);
         row.addEventListener("click", () => this._toggleReveal(key, side, p));
         body.appendChild(row);

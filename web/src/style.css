@@ -1456,6 +1456,11 @@ header h1::after {
   opacity: 0.6;
 }
 
+.rp-paw-lone {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
 .rp-row.rp-wolf.revealed {
   background: rgba(224, 72, 72, 0.14);
 }

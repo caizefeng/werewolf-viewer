@@ -14,6 +14,18 @@ const VOLUME_KEY = "werewolf.volume"; // {volume, muted} as last set by the user
 // midpoint, so the guard is what keeps a neighbour's ribbon colour hidden;
 // the pad only matters for 3-character labels. Older metadata without
 // label/span falls back to its stored y0/y1.
+// What a wolf-side player knows (京城大师赛 boards; rules checked 2026-10-18):
+// PACK wolves wake together and know each other -- 狼人 and the wolf-side
+// roles below -- while LONE wolves (机械狼, 假面, 盗宝大师, 九尾, a 混血儿
+// that copied a wolf, 隐狼) neither meet the pack nor are known to it. So
+// revealing as a pack wolf opens the pack and nobody else; revealing as a
+// lone wolf opens that seat only. A red-ribbon role the tables don't know
+// is treated as pack when its name contains 狼 and as lone otherwise (the
+// conservative choice: never show more than the player would know).
+const PACK_WOLF_ROLES = new Set(["狼人", "狼王", "白狼王", "黑狼王", "狼美人",
+  "狼术师", "诡术师", "血月使徒", "恶灵骑士", "噩梦之影", "梦魇", "狼巫"]);
+const LONE_WOLF_ROLES = new Set(["机械狼", "假面", "盗宝大师", "九尾", "九尾狐", "混血儿", "隐狼"]);
+
 const BAND_PAD = 0.035;
 const BAND_GUARD = 0.013;
 function revealBand(p) {
@@ -499,11 +511,20 @@ export class WerewolfPlayer {
     return !!x && x.includes("\u72fc");
   }
 
+  // "pack" (wakes with and knows the other pack wolves), "lone" (wolf-side
+  // but knows nobody) or null (not wolf-side)
+  _wolfKind(p) {
+    if (!this._isWolf(p)) return null;
+    if (PACK_WOLF_ROLES.has(p.role)) return "pack";
+    if (LONE_WOLF_ROLES.has(p.role)) return "lone";
+    return p.role && p.role.includes("\u72fc") ? "pack" : "lone";
+  }
+
   _wolfKeys() {
     const keys = [];
     for (const side of ["left", "right"]) {
       for (const p of (this.roleMap[side] || [])) {
-        if (this._isWolf(p)) keys.push(this._revealKey(side, p));
+        if (this._wolfKind(p) === "pack") keys.push(this._revealKey(side, p));
       }
     }
     return keys;
@@ -512,16 +533,23 @@ export class WerewolfPlayer {
   _toggleReveal(key, side, p, label) {
     const turningOn = !this.revealed.has(key);
     const who = label || `#${p.number}`;
-    if (this._isWolf(p)) {
-      // Reveal/hide the entire wolf team together
+    const kind = this._wolfKind(p);
+    if (kind === "pack") {
+      // Reveal/hide the whole pack together: these wolves know each other.
+      // Lone wolves are not in the pack's knowledge and stay as they are
       const keys = this._wolfKeys();
       for (const k of keys) {
         if (turningOn) this.revealed.add(k);
         else this.revealed.delete(k);
       }
       this.statusEl.textContent = turningOn
-        ? `Revealed ${who} and the rest of the wolf team (${keys.length})`
-        : "Hid the wolf team";
+        ? `Revealed ${who} and the rest of the wolf pack (${keys.length})`
+        : "Hid the wolf pack";
+    } else if (kind === "lone") {
+      // A lone wolf knows nobody: only this seat
+      if (turningOn) this.revealed.add(key);
+      else this.revealed.delete(key);
+      this.statusEl.textContent = `${turningOn ? "Revealed" : "Hid"} ${who} (plays alone, does not know the pack)`;
     } else {
       if (turningOn) this.revealed.add(key);
       else this.revealed.delete(key);
@@ -563,9 +591,12 @@ export class WerewolfPlayer {
     try { stored = JSON.parse(localStorage.getItem(storeKey)) || {}; } catch {}
     let changed = false;
     const entries = [];
-    const wolfRole = (role) => groups.get(role).some((m) => this._isWolf(m.p));
+    const rank = (role) => {
+      const kinds = groups.get(role).map((m) => this._wolfKind(m.p));
+      return kinds.includes("pack") ? 2 : (kinds.includes("lone") ? 1 : 0);
+    };
     const roles = [...groups.keys()].sort((a, b) =>
-      (Number(wolfRole(b)) - Number(wolfRole(a))) ||
+      (rank(b) - rank(a)) ||
       (Number(a === "") - Number(b === "")) ||          // unrecognised last
       (groups.get(b).length - groups.get(a).length) ||
       a.localeCompare(b, "zh"));
@@ -667,11 +698,16 @@ export class WerewolfPlayer {
     }
     panel.appendChild(modes);
 
-    const addPaw = (row) => {
+    // Pack wolves get the paw (click = the whole pack); lone wolves a
+    // dimmed paw (click = this seat only, they know nobody)
+    const addPaw = (row, kind) => {
       row.classList.add("rp-wolf");
-      row.title = "Wolf team \u2014 reveals/hides all wolves together";
+      if (kind === "lone") row.classList.add("rp-lone");
+      row.title = kind === "lone"
+        ? "Lone wolf \u2014 does not know the pack; reveals this seat only"
+        : "Wolf pack \u2014 reveals/hides all pack wolves together";
       const paw = document.createElement("span");
-      paw.className = "rp-paw";
+      paw.className = "rp-paw" + (kind === "lone" ? " rp-paw-lone" : "");
       paw.textContent = "\ud83d\udc3a";
       row.appendChild(paw);
     };
@@ -701,7 +737,7 @@ export class WerewolfPlayer {
         row.appendChild(spacer);
         // The paw (and its "wolf team" tooltip) only once this seat is
         // revealed: marking wolf seats up front would give the game away
-        if (on && this._isWolf(p)) addPaw(row);
+        if (on && this._wolfKind(p)) addPaw(row, this._wolfKind(p));
         row.appendChild(role);
         row.addEventListener("click", () => this._toggleReveal(key, side, p));
         body.appendChild(row);
@@ -719,7 +755,7 @@ export class WerewolfPlayer {
         // Only once revealed does the row say which seat that was
         state.textContent = on ? `seat ${e.p.number}` : "\u2022\u2022\u2022";
         row.appendChild(name);
-        if (this._isWolf(e.p)) addPaw(row);
+        if (this._wolfKind(e.p)) addPaw(row, this._wolfKind(e.p));
         row.appendChild(state);
         row.addEventListener("click", () => this._toggleReveal(e.key, e.side, e.p, e.label));
         body.appendChild(row);

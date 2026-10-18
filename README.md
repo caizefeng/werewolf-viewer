@@ -36,7 +36,7 @@ Hover the **ROLES** tab on the right edge. Everything starts blind.
 
 - **By role** lists the roles in play with no seats shown. Clones are numbered (平民 1 … 4) in a random order fixed per game, so picking "平民 2" tells you nothing until you reveal it. Once revealed, the row says which seat that was.
 - **By seat** lists seats 1 to 12. Click one to open its mask.
-- **Wolves reveal as a team.** Picking any wolf opens every wolf's row at once, the way a wolf knows the pack from the first night. The team is read from the ribbon colour the broadcast paints behind each label, so wolf-side roles whose names do not say wolf (假面, 盗宝大师, 九尾, a 机械狼 labelled with the role it copied) are included.
+- **Wolves reveal what they know.** Picking a pack wolf (狼人, 狼王, 狼术师, 诡术师 …) opens every pack wolf's row at once, the way they meet on the first night. Lone wolves that never meet the pack (机械狼, 假面, 盗宝大师, 九尾) reveal only themselves, and the pack never shows them. Wolf-side comes from the ribbon colour the broadcast paints behind each label; the kind comes from the role.
 - `Blind` and `All` reset either way. Your choices persist per game in the browser.
 
 ![By role mode with the wolf team revealed: three rows open on the masks](docs/screenshots/reveal-role.png)

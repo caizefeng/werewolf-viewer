@@ -342,11 +342,18 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
     the index->seat assignment is a random permutation generated once per video and stored in
     localStorage (werewolf.roleorder.<id>) so labels stay stable but leak nothing. Pick one to
     'blend in' as that role; once revealed the row shows which seat it was
-  Clicking a WOLF (any role containing 狼) reveals/hides the whole wolf team in either mode,
-  mimicking playing as a wolf who knows the pack. In By seat mode the paw marker and its "wolf
-  team" tooltip appear only on revealed rows (marking wolf seats up front gave the game away
-  the moment the panel opened; user report 2026-10-15); By role rows keep it since the role
-  name says wolf anyway. Blind/All buttons; the revealed set persists per
+  Wolf-side players come in two kinds (PACK_WOLF_ROLES / LONE_WOLF_ROLES in player.js,
+  `_wolfKind`): **pack** wolves wake together and know each other (狼人, 狼王, 白狼王, 黑狼王,
+  狼美人, 狼术师 of 魔幻对决, 诡术师 of 诡术之境 -- two different roles), **lone** wolves neither meet
+  the pack nor are known to it (机械狼, 假面, 盗宝大师, 九尾/九尾狐 of 青丘夜影, a 混血儿 that copied a
+  wolf, 隐狼). Clicking a pack wolf reveals/hides the whole pack and never a lone wolf; clicking a
+  lone wolf reveals that seat only. Wolf-side comes from the ribbon colour (faction) and the kind
+  from the role name; an unknown red role is pack if its name contains 狼, else lone (never show
+  more than the player would know). Rules checked on the web 2026-10-18 after the user corrected
+  a first version that revealed every red ribbon as one team. In By seat mode the paw marker
+  (dimmed for lone wolves) and its tooltip appear only on revealed rows (marking wolf seats up
+  front gave the game away the moment the panel opened; user report 2026-10-15); By role rows
+  keep it since the role name says wolf anyway. 白泽 (青丘夜影) is a correct role name, good side. Blind/All buttons; the revealed set persists per
   video. Needs a role map (re-analyze older videos). Hidden-roles broadcasts show an explanation only
 - **Per-player wire frames on the masks** (`.name-mask-frame`, drawn by createNameMasks from the
   role map): one thin gold outline per seat band (dim while covered, glowing around a revealed row)

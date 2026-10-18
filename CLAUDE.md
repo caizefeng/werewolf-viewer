@@ -271,6 +271,17 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   centered in the role column that isn't an exact role is a misread label (notes sit inward,
   badges outward), snapped by containment or edit distance 1 (械狼->机械狼, 狼人学->狼人,
   自神->白神). 未知 never snaps. Without this a misread row vanished from the role map
+- **Annotated labels** (COMPOUND_ROLE_PREFIXES, checked first in _snap_role): the broadcast labels a
+  机械狼 that copied a role with the copied role instead of its own name ("机械通灵" on S23E27 G3
+  seat 2, a taller 4-character ribbon; "机械预言", "机械女巫" presumably). Any label starting with
+  机械 maps to 机械狼: the panel names the wolf, whatever it learned, and the wolf team includes it
+- **Every seat is in the role map, recognised or not** (build_role_map): seats 1-6 / 7-12 get their
+  band from a 6-row layout fitted by least squares to the rows that were read (_fit_layout:
+  first-row centre + pitch, sanity ranges LAYOUT_PITCH_RANGE / LAYOUT_FIRST_RANGE, constants
+  SEAT_FIRST_ROW_Y / SEAT_ROW_SPACING as fallback). Measured across S21-S23 the rows sit at
+  0.117 + 0.16·i within 0.005, so seat reveal never depends on a label being read; an
+  unrecognised seat keeps role "" and the viewer lists it as 未识别 (last in By role). A video with
+  no labels at all still gets the standard 12-seat map (with default masks)
 - **Hidden-roles broadcasts**: the broadcast shows 未知 instead of a role until it is revealed in-game,
   so the audience is already blind. _scan_range counts frames with >=2 未知 labels; >=2 such
   frames -> hidden_roles=True in metadata.json (extended scans skipped; the scan also stops

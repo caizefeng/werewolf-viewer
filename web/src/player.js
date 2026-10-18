@@ -557,6 +557,7 @@ export class WerewolfPlayer {
     const entries = [];
     const roles = [...groups.keys()].sort((a, b) =>
       (Number(this._isWolf(b)) - Number(this._isWolf(a))) ||
+      (Number(a === "") - Number(b === "")) ||          // unrecognised last
       (groups.get(b).length - groups.get(a).length) ||
       a.localeCompare(b, "zh"));
     for (const role of roles) {
@@ -572,11 +573,12 @@ export class WerewolfPlayer {
         stored[role] = order;
         changed = true;
       }
+      const name = role || "\u672a\u8bc6\u522b";   // unrecognised label
       order.forEach((key, i) => {
         const m = members.find((x) => this._revealKey(x.side, x.p) === key);
         entries.push({
           role, key, side: m.side, p: m.p,
-          label: members.length > 1 ? `${role} ${i + 1}` : role,
+          label: members.length > 1 ? `${name} ${i + 1}` : name,
         });
       });
     }
@@ -683,7 +685,9 @@ export class WerewolfPlayer {
         spacer.textContent = `Seat ${p.number}`;
         const role = document.createElement("span");
         role.className = "rp-role";
-        role.textContent = on ? p.role : "\u2022\u2022\u2022";
+        // A seat whose label the OCR could not read has role "": its band is
+        // positional, so it opens like any other and the row says so
+        role.textContent = on ? (p.role || "\u672a\u8bc6\u522b") : "\u2022\u2022\u2022";
         row.appendChild(num);
         row.appendChild(spacer);
         // The paw (and its "wolf team" tooltip) only once this seat is

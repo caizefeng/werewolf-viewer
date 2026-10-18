@@ -38,12 +38,28 @@ ROLE_NAMES = [
 ]
 ROLE_SET = set(ROLE_NAMES)
 
+# The broadcast sometimes annotates a role on its ribbon instead of naming
+# it: a 机械狼 that has copied a role is labelled "机械通灵" / "机械预言" /
+# "机械女巫" (prefix + the copied role, abbreviated). The reveal panel still
+# calls it 机械狼 (the user plays as the wolf, whatever it learned).
+COMPOUND_ROLE_PREFIXES = {"机械": "机械狼"}
+
 # Standard 12-player sidebar layout: seats 1-6 top-to-bottom on the left,
 # 7-12 on the right, at a fixed row pitch. Used to infer a row's seat number
 # from its vertical position whenever its number badge wasn't OCR'd.
 SEAT_BASE = {"left": 1, "right": 7}
 SEAT_ROW_SPACING = 0.16   # fallback row pitch (fraction of frame height)
 SEAT_FIRST_ROW_Y = 0.125  # fallback center of the first row
+
+# Seat rows sit at the same places in every broadcast (S21-S23 measured:
+# centres 0.117 + 0.16 * i within 0.005), so seat reveal never depends on a
+# label being read. The layout (first-row centre, pitch) is fitted by least
+# squares to whatever rows were read and otherwise falls back to the
+# constants; a seat whose label was not recognised still gets its band, with
+# role "" (the viewer shows it as unrecognised and opens it like any other).
+LAYOUT_PITCH_RANGE = (0.13, 0.19)
+LAYOUT_FIRST_RANGE = (0.08, 0.17)
+LABEL_HALF_HEIGHT = 0.04   # a 2-character ribbon label spans about yc +- 0.04
 
 # Reveal band of a row (fraction of frame height): the role label's own box
 # plus BAND_PAD, and never closer than BAND_GUARD to the midpoint toward a
@@ -186,6 +202,9 @@ def _snap_role(text):
         return text
     if len(text) < 2:
         return None
+    for prefix, role in COMPOUND_ROLE_PREFIXES.items():
+        if text.startswith(prefix) and len(text) > len(prefix):
+            return role
     best = None
     for role in ROLE_NAMES:
         if role in text or text in role:
@@ -382,15 +401,35 @@ def _infer_seats(rows, ocr_nums, side):
     return seats
 
 
+def _fit_layout(points):
+    """(row index 0-5, yc) pairs -> (first-row centre, pitch), least squares
+    when at least two distinct rows were read, else the standard layout."""
+    idx = sorted(set(i for i, _ in points))
+    if len(idx) >= 2:
+        xs = np.array([i for i, _ in points], dtype=float)
+        ys = np.array([y for _, y in points], dtype=float)
+        pitch, first = np.polyfit(xs, ys, 1)
+        if LAYOUT_PITCH_RANGE[0] <= pitch <= LAYOUT_PITCH_RANGE[1] and LAYOUT_FIRST_RANGE[0] <= first <= LAYOUT_FIRST_RANGE[1]:
+            return float(first), float(pitch)
+    elif len(idx) == 1:
+        i, y = points[0]
+        first = y - i * SEAT_ROW_SPACING
+        if LAYOUT_FIRST_RANGE[0] <= first <= LAYOUT_FIRST_RANGE[1]:
+            return float(first), SEAT_ROW_SPACING
+    return SEAT_FIRST_ROW_Y, SEAT_ROW_SPACING
+
+
 def build_role_map(all_items, all_regions):
-    """Map each player row to its seat number, role, and reveal y-band.
+    """Map every seat (1-6 left, 7-12 right) to its role and reveal y-band.
 
     Used by the viewer's role-reveal panel. Only the seat ID identifies a
     player: names are not extracted (OCR of the stylized name tags was
-    unreliable). The role string is only a menu label — the viewer reveals
-    the real pixels — so OCR noise in it is harmless.
+    unreliable). The role string is only a menu label -- the viewer reveals
+    the real pixels -- so OCR noise in it is harmless, and a seat whose
+    label could not be read keeps role "" with a band from the fitted
+    layout, so seat reveal works regardless of recognition.
     """
-    role_map = {}
+    found = {}   # seat -> {"role", "label": (ty0, ty1), "yc"}
     for side in ("left", "right"):
         regs = [r for r in all_regions if r["side"] == side]
         if not regs:
@@ -423,24 +462,33 @@ def build_role_map(all_items, all_regions):
                 nums[bi].append(v)
         seats = _infer_seats(rows, nums, side)
 
-        players = []
         lo, hi = SEAT_BASE[side], SEAT_BASE[side] + 5
         for i, row in enumerate(rows):
-            if not lo <= seats[i] <= hi:
-                print(f"  Dropping {side} row '{row['role']}' at y={row['yc']:.2f}: "
-                      f"seat {seats[i]} is outside {lo}-{hi}")
+            if not lo <= seats[i] <= hi or seats[i] in found:
+                why = "taken" if seats[i] in found else f"outside {lo}-{hi}"
+                print(f"  Dropping {side} row '{row['role']}' at y={row['yc']:.2f}: seat {seats[i]} is {why}")
                 continue
-            mu, md = bands[i]
-            y0 = max(row["ty0"] - BAND_PAD, mu + BAND_GUARD)
-            y1 = min(row["ty1"] + BAND_PAD, md - BAND_GUARD)
-            if y1 - y0 < 0.03:  # rows too close for a label-based band: guarded midpoints
-                y0, y1 = mu + BAND_GUARD, md - BAND_GUARD
-            players.append({"number": seats[i], "role": row["role"],
-                            "y0": round(y0, 4), "y1": round(y1, 4),
-                            "label": [round(row["ty0"], 4), round(row["ty1"], 4)],
-                            "span": [round(mu, 4), round(md, 4)]})
-        players.sort(key=lambda p: p["number"])
-        role_map[side] = players
+            found[seats[i]] = {"role": row["role"], "label": (row["ty0"], row["ty1"]), "yc": row["yc"]}
+
+    first, pitch = _fit_layout([((seat - 1) % 6, f["yc"]) for seat, f in found.items()])
+    role_map = {"left": [], "right": []}
+    for seat in range(1, 13):
+        side = "left" if seat <= 6 else "right"
+        yc = first + ((seat - 1) % 6) * pitch
+        mu, md = max(0.0, yc - pitch / 2), min(1.0, yc + pitch / 2)
+        f = found.get(seat)
+        ty0, ty1 = f["label"] if f else (yc - LABEL_HALF_HEIGHT, yc + LABEL_HALF_HEIGHT)
+        y0 = max(ty0 - BAND_PAD, mu + BAND_GUARD)
+        y1 = min(ty1 + BAND_PAD, md - BAND_GUARD)
+        if y1 - y0 < 0.03:  # rows too close for a label-based band: guarded midpoints
+            y0, y1 = mu + BAND_GUARD, md - BAND_GUARD
+        role_map[side].append({"number": seat, "role": f["role"] if f else "",
+                               "y0": round(y0, 4), "y1": round(y1, 4),
+                               "label": [round(ty0, 4), round(ty1, 4)],
+                               "span": [round(mu, 4), round(md, 4)]})
+    missing = [seat for seat in range(1, 13) if seat not in found]
+    if missing:
+        print(f"  Seats without a recognised role label (positional band only): {missing}")
     return role_map
 
 
@@ -543,8 +591,8 @@ def _analyze(ocr, video_path):
         return DEFAULT_MASKS, {}, set(), True
 
     if not all_regions:
-        print("No role names detected. Using default mask positions.")
-        return DEFAULT_MASKS, {}, set(), False
+        print("No role names detected. Using default mask positions and the standard seat layout.")
+        return DEFAULT_MASKS, build_role_map([], []), set(), False
 
     # Recover rows whose role label the OCR misread (械狼, 狼人学, 自神)
     before = len(all_regions)

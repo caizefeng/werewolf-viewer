@@ -271,10 +271,32 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   centered in the role column that isn't an exact role is a misread label (notes sit inward,
   badges outward), snapped by containment or edit distance 1 (械狼->机械狼, 狼人学->狼人,
   自神->白神). 未知 never snaps. Without this a misread row vanished from the role map
+- **Role list** (ROLE_NAMES): S23 configurations added 2026-10-18 after a sweep of untested
+  boards -- 诡术之境 (诡术师, wolf-side; 魔术师, 定序王子, 狼术师 were known), 青丘夜影 (白泽 god, 九尾
+  wolf-side, labelled "九尾"), 盗宝大师 (盗宝大师 shows a RED ribbon, i.e. wolf-side in this board;
+  摄梦人, 蒙面人, 狼王), 假面舞会 S23 (假面 red). When a game shows '?' seats or a wrong name, add the
+  role here; the sweep found two real roles one edit away from known ones (诡术师/狼术师,
+  白泽/白痴) that edit-distance snapping silently renamed before the consistency rule below
+- **Consistently read unknown labels are kept as read** (_recover_misread_roles,
+  CONSISTENT_LABEL_FRAMES=3): a role-column label that OCR returns identically in >= 3 frames is
+  a real label, so it becomes the role name even if ROLE_NAMES does not know it (九尾 before it was
+  added) and it is never bent to a known name by edit distance ("edit" in _snap_role_kind);
+  containment and the 机械 prefix still apply, and a one-off misread (自神 once) still snaps. A
+  consistent misread of a KNOWN name (自神 for 白神 in some S22 fonts) therefore only snaps if
+  read inconsistently -- accepted: the panel label is cosmetic, the ribbon colour gives the team
 - **Annotated labels** (COMPOUND_ROLE_PREFIXES, checked first in _snap_role): the broadcast labels a
   机械狼 that copied a role with the copied role instead of its own name ("机械通灵" on S23E27 G3
   seat 2, a taller 4-character ribbon; "机械预言", "机械女巫" presumably). Any label starting with
   机械 maps to 机械狼: the panel names the wolf, whatever it learned, and the wolf team includes it
+- **Faction from ribbon colour** (`_ribbon_colour` in ocr_items_in_frame, medians per row in
+  _cluster_rows, `faction: "wolf" | "good" | ""` per role_map entry): the broadcast paints wolf
+  ribbons red and everyone else green (S23) or cream (S22 villagers). Each vertical label box is
+  grown 30% sideways / 25% vertically and the fractions of red-hued and green-hued saturated pixels
+  (S>60, V>35) counted; wolf = red >= RIBBON_RED_MIN (0.2) and red > green. Measured S22/S23:
+  wolves red 0.23-0.61 (green <= 0.08), others green 0.33-0.68 or cream (both < 0.13), red <= 0.17
+  except where a red badge intrudes (green still wins). The viewer's wolf team (`_isWolf(player)`)
+  uses faction when present and falls back to the name containing 狼, so wolf-side roles whose
+  names do not say wolf (假面; a 混血儿 that copied a wolf shows red) join the pack
 - **Every seat is in the role map, recognised or not** (build_role_map): seats 1-6 / 7-12 get their
   band from a 6-row layout fitted by least squares to the rows that were read (_fit_layout:
   first-row centre + pitch, sanity ranges LAYOUT_PITCH_RANGE / LAYOUT_FIRST_RANGE, constants

@@ -35,6 +35,8 @@ ROLE_NAMES = [
     "典狱长", "狼美人", "黑夜使者", "定序王子", "魔术师",
     "舞者", "毒师", "白神", "蒙面人", "摄梦人", "白夜使者",
     "杠精",
+    # S23 configurations (added 2026-10-18 from 诡术之境 / 青丘夜影 broadcasts)
+    "诡术师", "白泽", "九尾", "九尾狐",
 ]
 ROLE_SET = set(ROLE_NAMES)
 
@@ -43,6 +45,17 @@ ROLE_SET = set(ROLE_NAMES)
 # "机械女巫" (prefix + the copied role, abbreviated). The reveal panel still
 # calls it 机械狼 (the user plays as the wolf, whatever it learned).
 COMPOUND_ROLE_PREFIXES = {"机械": "机械狼"}
+
+# Faction from the ribbon colour behind a label: the broadcast paints wolf
+# ribbons red and everyone else's green (S23 gods and villagers) or cream
+# (S22 villagers). Measured on S22/S23 frames (box grown 30% sideways and
+# 25% vertically to take in ribbon around the glyphs): wolves red 0.23-0.61
+# with green <= 0.08; others green 0.33-0.68 or (cream) both < 0.13, red at
+# most 0.17 except where a red badge intrudes (then green still wins). So
+# wolf = red >= RIBBON_RED_MIN and red > green. This is what tells the
+# reveal panel who is on the wolf team when the role name does not say 狼
+# (假面, 混血儿 that copied a wolf, future roles).
+RIBBON_RED_MIN = 0.2
 
 # Standard 12-player sidebar layout: seats 1-6 top-to-bottom on the left,
 # 7-12 on the right, at a fixed row pitch. Used to infer a row's seat number
@@ -144,16 +157,39 @@ def ocr_items_in_frame(ocr, frame, edge_ratio=0.30, min_score=0.5):
             x2, y2 = poly.max(axis=0)
             if x2 > crop_w:
                 continue
-            items.append({
+            vert = bool((y2 - y1) > (x2 - x1))
+            item = {
                 "side": side, "text": text.strip(), "score": float(score),
                 "x0": round((x_offset + x1) / w, 4),
                 "x1": round((x_offset + x2) / w, 4),
                 "y0": round(y1 / h, 4), "y1": round(y2 / h, 4),
                 # Sidebar role labels are vertical text; notes, names, the
                 # config line and the watermark are horizontal
-                "vert": bool((y2 - y1) > (x2 - x1)),
-            })
+                "vert": vert,
+            }
+            if vert:
+                item["red"], item["green"] = _ribbon_colour(frame, x_offset + x1, y1, x_offset + x2, y2)
+            items.append(item)
     return items
+
+
+def _ribbon_colour(frame, x0, y0, x1, y1, grow_x=0.3, grow_y=0.25):
+    """Fractions of red-hued and green-hued saturated pixels in a label box
+    grown by (grow_x, grow_y) of its size, i.e. the ribbon behind the text."""
+    h, w = frame.shape[:2]
+    bw, bh = x1 - x0, y1 - y0
+    xa, xb = max(0, int(x0 - grow_x * bw)), min(w, int(x1 + grow_x * bw))
+    ya, yb = max(0, int(y0 - grow_y * bh)), min(h, int(y1 + grow_y * bh))
+    box = frame[ya:yb, xa:xb]
+    if box.size == 0:
+        return 0.0, 0.0
+    hsv = cv2.cvtColor(box, cv2.COLOR_BGR2HSV)
+    hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    coloured = (sat > 60) & (val > 35)
+    n = box.shape[0] * box.shape[1]
+    red = float((coloured & ((hue < 12) | (hue > 165))).sum() / n)
+    green = float((coloured & (hue >= 35) & (hue <= 100)).sum() / n)
+    return round(red, 3), round(green, 3)
 
 
 def _roles_from_items(items):
@@ -174,6 +210,7 @@ def _roles_from_items(items):
                 "w": round(it["x1"] - it["x0"], 4),
                 "h": round(it["y1"] - it["y0"], 4),
                 "text": it["text"], "side": it["side"],
+                "red": it.get("red"), "green": it.get("green"),
             })
     return regions
 
@@ -191,20 +228,31 @@ def _levenshtein(a, b):
 
 
 def _snap_role(text):
-    """Map an OCR'd role-column label to the role it most likely is.
+    """Map an OCR'd role-column label to the role it most likely is (see
+    _snap_role_kind)."""
+    return _snap_role_kind(text)[0]
+
+
+def _snap_role_kind(text):
+    """(role, how) for an OCR'd role-column label.
 
     OCR of the vertical labels occasionally drops or adds a character
-    ("械狼" for 机械狼, "狼人学" for 狼人, "自神" for 白神). Containment in
-    either direction wins, then edit distance 1; anything further apart
-    (including 未知) stays unmatched.
+    ("械狼" for 机械狼, "狼人学" for 狼人, "自神" for 白神). An exact name
+    wins ("exact"), then an annotated 机械狼 ("prefix"), then containment in
+    either direction ("contain"), then edit distance 1 ("edit"); anything
+    further apart (including 未知) stays unmatched (None, None). "edit" is
+    the fallible one: a real role one character away from a known name
+    (诡术师 vs 狼术师, 白泽 vs 白痴) looks like a misread of it, which is why
+    _recover_misread_roles refuses "edit" for labels read the same way in
+    several frames.
     """
     if text in ROLE_SET:
-        return text
+        return text, "exact"
     if len(text) < 2:
-        return None
+        return None, None
     for prefix, role in COMPOUND_ROLE_PREFIXES.items():
         if text.startswith(prefix) and len(text) > len(prefix):
-            return role
+            return role, "prefix"
     best = None
     for role in ROLE_NAMES:
         if role in text or text in role:
@@ -215,19 +263,33 @@ def _snap_role(text):
             continue
         if best is None or cand < best:
             best = cand
-    return best[2] if best else None
+    if best is None:
+        return None, None
+    return best[2], ("contain" if best[0] == 0 else "edit")
+
+
+# A role-column label read identically in at least this many frames is a
+# consistent reading, not a misread: it is kept as the role name even when
+# no known role matches (a role the list does not know yet -- 九尾 in 青丘夜影
+# before it was added) and it is never bent to a known name by edit
+# distance (诡术师 would become 狼术师, 白泽 would become 白痴). Containment
+# and 机械 prefixes still apply (械狼 -> 机械狼, 狼人学 -> 狼人).
+CONSISTENT_LABEL_FRAMES = 3
 
 
 def _recover_misread_roles(all_regions, all_items):
-    """Add role boxes for role-column labels the OCR misread.
+    """Add role boxes for role-column labels the OCR misread or does not know.
 
     The role column's x-range is known from the exact matches. Any short CJK
-    box centered in that column that isn't an exact role is a misread role
-    label (notes sit inward of the column, numbers outward), so snap it to
-    the nearest role name. Without this a misread row vanishes from the
-    role map and can't be revealed.
+    box centered in that column that isn't an exact role is either a misread
+    role label (notes sit inward of the column, numbers outward) -- snapped
+    to the nearest role name -- or, when the same text comes back frame
+    after frame, a role name the list does not know, kept as read. Without
+    this such a row vanishes from the role map and can't be revealed.
     """
     recovered = list(all_regions)
+    seen = Counter(it["text"] for it in all_items if it.get("vert"))
+    kept_unknown = set()
     for side in ("left", "right"):
         regs = [r for r in all_regions if r["side"] == side]
         if not regs:
@@ -243,13 +305,20 @@ def _recover_misread_roles(all_regions, all_items):
             xc = (it["x0"] + it["x1"]) / 2
             if abs(xc - cx) > col_w * 0.6 or (it["x1"] - it["x0"]) > col_w * 1.6:
                 continue
-            role = _snap_role(t)
-            if role is None:
+            role, how = _snap_role_kind(t)
+            consistent = seen[t] >= CONSISTENT_LABEL_FRAMES and t != UNKNOWN_LABEL
+            if consistent and how in (None, "edit"):
+                role = t            # a label the list does not know, read the same way every time
+                kept_unknown.add(t)
+            elif role is None:
                 continue
             recovered.append({"x": it["x0"], "y": it["y0"],
                               "w": round(it["x1"] - it["x0"], 4),
                               "h": round(it["y1"] - it["y0"], 4),
-                              "text": role, "side": side, "recovered": True})
+                              "text": role, "side": side, "recovered": True,
+                              "red": it.get("red"), "green": it.get("green")})
+    if kept_unknown:
+        print(f"  Labels kept as read (not in ROLE_NAMES, consistent across frames): {sorted(kept_unknown)}")
     return recovered
 
 
@@ -342,20 +411,29 @@ def _cluster_rows(regs, tol=0.05):
     per row tolerates per-frame OCR noise). Each row carries the median
     label box (ty0..ty1) for its reveal band."""
     pts = sorted((r["y"] + r["h"] / 2, r["y"], r["y"] + r["h"], r["text"],
-                  0.5 if r.get("recovered") else 1.0) for r in regs)
+                  0.5 if r.get("recovered") else 1.0, r.get("red"), r.get("green")) for r in regs)
     clusters = []
-    for yc, y0, y1, role, wgt in pts:
+    for yc, y0, y1, role, wgt, red, green in pts:
         if clusters and yc - clusters[-1]["last"] <= tol:
             c = clusters[-1]
             c["ys"].append(yc); c["tops"].append(y0); c["bots"].append(y1)
             c["votes"][role] += wgt; c["last"] = yc
         else:
-            clusters.append({"ys": [yc], "tops": [y0], "bots": [y1],
-                             "votes": Counter({role: wgt}), "last": yc})
-    return [{"role": c["votes"].most_common(1)[0][0],
-             "yc": float(np.median(c["ys"])), "count": len(c["ys"]),
-             "ty0": float(np.median(c["tops"])), "ty1": float(np.median(c["bots"]))}
-            for c in clusters]
+            c = {"ys": [yc], "tops": [y0], "bots": [y1], "reds": [], "greens": [],
+                 "votes": Counter({role: wgt}), "last": yc}
+            clusters.append(c)
+        if red is not None and green is not None:
+            c["reds"].append(red); c["greens"].append(green)
+    out = []
+    for c in clusters:
+        red = float(np.median(c["reds"])) if c["reds"] else None
+        green = float(np.median(c["greens"])) if c["greens"] else None
+        faction = "" if red is None else ("wolf" if red >= RIBBON_RED_MIN and red > green else "good")
+        out.append({"role": c["votes"].most_common(1)[0][0],
+                    "yc": float(np.median(c["ys"])), "count": len(c["ys"]),
+                    "ty0": float(np.median(c["tops"])), "ty1": float(np.median(c["bots"])),
+                    "faction": faction, "red": red, "green": green})
+    return out
 
 
 def _bands_from_centers(cs):
@@ -468,7 +546,8 @@ def build_role_map(all_items, all_regions):
                 why = "taken" if seats[i] in found else f"outside {lo}-{hi}"
                 print(f"  Dropping {side} row '{row['role']}' at y={row['yc']:.2f}: seat {seats[i]} is {why}")
                 continue
-            found[seats[i]] = {"role": row["role"], "label": (row["ty0"], row["ty1"]), "yc": row["yc"]}
+            found[seats[i]] = {"role": row["role"], "label": (row["ty0"], row["ty1"]), "yc": row["yc"],
+                               "faction": row.get("faction", "")}
 
     first, pitch = _fit_layout([((seat - 1) % 6, f["yc"]) for seat, f in found.items()])
     role_map = {"left": [], "right": []}
@@ -483,6 +562,7 @@ def build_role_map(all_items, all_regions):
         if y1 - y0 < 0.03:  # rows too close for a label-based band: guarded midpoints
             y0, y1 = mu + BAND_GUARD, md - BAND_GUARD
         role_map[side].append({"number": seat, "role": f["role"] if f else "",
+                               "faction": f["faction"] if f else "",
                                "y0": round(y0, 4), "y1": round(y1, 4),
                                "label": [round(ty0, 4), round(ty1, 4)],
                                "span": [round(mu, 4), round(md, 4)]})

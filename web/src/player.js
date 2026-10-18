@@ -487,15 +487,23 @@ export class WerewolfPlayer {
 
   // Wolf-aligned roles (any role whose name contains 狼) see each other at
   // night, so revealing one reveals the whole pack — mimics playing as a wolf.
-  _isWolf(role) {
-    return !!role && role.includes("\u72fc");
+  // Wolf team membership: the ribbon colour the analysis measured (faction
+  // "wolf" / "good") when present, else the role name containing 狼. The
+  // colour is what covers wolf-side roles whose names do not say wolf
+  // (假面, a 混血儿 that copied a wolf, roles added later).
+  _isWolf(x) {
+    if (x && typeof x === "object") {
+      if (x.faction === "wolf" || x.faction === "good") return x.faction === "wolf";
+      return this._isWolf(x.role);
+    }
+    return !!x && x.includes("\u72fc");
   }
 
   _wolfKeys() {
     const keys = [];
     for (const side of ["left", "right"]) {
       for (const p of (this.roleMap[side] || [])) {
-        if (this._isWolf(p.role)) keys.push(this._revealKey(side, p));
+        if (this._isWolf(p)) keys.push(this._revealKey(side, p));
       }
     }
     return keys;
@@ -504,7 +512,7 @@ export class WerewolfPlayer {
   _toggleReveal(key, side, p, label) {
     const turningOn = !this.revealed.has(key);
     const who = label || `#${p.number}`;
-    if (this._isWolf(p.role)) {
+    if (this._isWolf(p)) {
       // Reveal/hide the entire wolf team together
       const keys = this._wolfKeys();
       for (const k of keys) {
@@ -555,8 +563,9 @@ export class WerewolfPlayer {
     try { stored = JSON.parse(localStorage.getItem(storeKey)) || {}; } catch {}
     let changed = false;
     const entries = [];
+    const wolfRole = (role) => groups.get(role).some((m) => this._isWolf(m.p));
     const roles = [...groups.keys()].sort((a, b) =>
-      (Number(this._isWolf(b)) - Number(this._isWolf(a))) ||
+      (Number(wolfRole(b)) - Number(wolfRole(a))) ||
       (Number(a === "") - Number(b === "")) ||          // unrecognised last
       (groups.get(b).length - groups.get(a).length) ||
       a.localeCompare(b, "zh"));
@@ -692,7 +701,7 @@ export class WerewolfPlayer {
         row.appendChild(spacer);
         // The paw (and its "wolf team" tooltip) only once this seat is
         // revealed: marking wolf seats up front would give the game away
-        if (on && this._isWolf(p.role)) addPaw(row);
+        if (on && this._isWolf(p)) addPaw(row);
         row.appendChild(role);
         row.addEventListener("click", () => this._toggleReveal(key, side, p));
         body.appendChild(row);
@@ -710,7 +719,7 @@ export class WerewolfPlayer {
         // Only once revealed does the row say which seat that was
         state.textContent = on ? `seat ${e.p.number}` : "\u2022\u2022\u2022";
         row.appendChild(name);
-        if (this._isWolf(e.role)) addPaw(row);
+        if (this._isWolf(e.p)) addPaw(row);
         row.appendChild(state);
         row.addEventListener("click", () => this._toggleReveal(e.key, e.side, e.p, e.label));
         body.appendChild(row);

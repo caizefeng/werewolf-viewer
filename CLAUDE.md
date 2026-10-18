@@ -281,9 +281,11 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   CONSISTENT_LABEL_FRAMES=3): a role-column label that OCR returns identically in >= 3 frames is
   a real label, so it becomes the role name even if ROLE_NAMES does not know it (九尾 before it was
   added) and it is never bent to a known name by edit distance ("edit" in _snap_role_kind);
-  containment and the 机械 prefix still apply, and a one-off misread (自神 once) still snaps. A
-  consistent misread of a KNOWN name (自神 for 白神 in some S22 fonts) therefore only snaps if
-  read inconsistently -- accepted: the panel label is cosmetic, the ribbon colour gives the team
+  containment and the 机械 prefix still apply, and a one-off misread still snaps. A consistent
+  misread of a KNOWN name is handled by ROLE_ALIASES ("alias" kind, checked right after exact):
+  自神 -> 白神, which the S22 ribbon font produces in every frame (the first re-scan with the rule
+  labelled three S22 seats 自神). Add to that table when a re-scan prints "Labels kept as read"
+  for something that is not a real role
 - **Annotated labels** (COMPOUND_ROLE_PREFIXES, checked first in _snap_role): the broadcast labels a
   机械狼 that copied a role with the copied role instead of its own name ("机械通灵" on S23E27 G3
   seat 2, a taller 4-character ribbon; "机械预言", "机械女巫" presumably). Any label starting with

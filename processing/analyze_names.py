@@ -46,6 +46,10 @@ ROLE_SET = set(ROLE_NAMES)
 # calls it 机械狼 (the user plays as the wolf, whatever it learned).
 COMPOUND_ROLE_PREFIXES = {"机械": "机械狼"}
 
+# Readings the OCR gets consistently wrong in some fonts (so the
+# consistent-label rule below would otherwise keep them as new roles)
+ROLE_ALIASES = {"自神": "白神"}   # S22 ribbon font: 白 read as 自 in every frame
+
 # Faction from the ribbon colour behind a label: the broadcast paints wolf
 # ribbons red and everyone else's green (S23 gods and villagers) or cream
 # (S22 villagers). Measured on S22/S23 frames (box grown 30% sideways and
@@ -248,6 +252,8 @@ def _snap_role_kind(text):
     """
     if text in ROLE_SET:
         return text, "exact"
+    if text in ROLE_ALIASES:
+        return ROLE_ALIASES[text], "alias"
     if len(text) < 2:
         return None, None
     for prefix, role in COMPOUND_ROLE_PREFIXES.items():

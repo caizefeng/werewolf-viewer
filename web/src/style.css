@@ -1569,6 +1569,11 @@ header h1::after {
   transition: transform 0.2s ease;
 }
 
+.lib-group-del {
+  align-self: center;
+  margin-left: 0.15rem;
+}
+
 #video-list li.lib-group.collapsed .lib-group-chev {
   transform: rotate(-90deg);
 }

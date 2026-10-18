@@ -369,7 +369,10 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - **Library grouped by episode** (loadVideoList + parseTitle in main.js): one header per SxxEyy
   showing the broadcast date (YYMMDD in the title → 20YY-MM-DD) and game count, then one short row
   per game (第四局 · 机械狼通灵师) with the badge/↻/× controls; headers collapse on click, remembered
-  per browser (werewolf.libgroup.<episode>). Rows keep data-id, and data-title holds the full title
+  per browser (werewolf.libgroup.<episode>). Each header also has an **×** (deleteEpisode) that
+  removes every game of the episode after one confirmation listing them; games with a running job
+  are kept and the dialog says so, and the button is disabled (updateGroupBusy) while any game of
+  the episode is busy. removeVideo is the shared per-game delete used by both buttons. Rows keep data-id, and data-title holds the full title
   for the info bar. Titles without an SxxEyy code are listed ungrouped
 - Info bar shows the open video's title (also set as the document title)
 - **Visual polish pass (2026-10-15, reviewed with headless screenshots at 1600x1000 and 1366x768)**:

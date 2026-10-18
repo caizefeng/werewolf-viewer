@@ -112,12 +112,16 @@ async function loadVideoList() {
         const head = document.createElement("li");
         head.className = "lib-group" + (isGroupCollapsed(g.key) ? " collapsed" : "");
         head.dataset.group = g.key;
-        head.innerHTML = `<span class="lib-group-name"></span><span class="lib-group-date"></span><span class="lib-group-count"></span><span class="lib-group-chev">▾</span>`;
+        head.innerHTML = `<span class="lib-group-name"></span><span class="lib-group-date"></span><span class="lib-group-count"></span><button class="video-del-btn lib-group-del" title="Delete every game in this episode">×</button><span class="lib-group-chev">▾</span>`;
         head.querySelector(".lib-group-name").textContent = g.key;
         head.querySelector(".lib-group-date").textContent = formatBroadcastDate(g.date);
         head.querySelector(".lib-group-count").textContent = `${g.items.length} game${g.items.length === 1 ? "" : "s"}`;
         head.title = isGroupCollapsed(g.key) ? "Expand" : "Collapse";
         head.addEventListener("click", () => toggleGroup(g.key));
+        head.querySelector(".lib-group-del").addEventListener("click", (e) => {
+          e.stopPropagation();
+          deleteEpisode(g.key, g.items);
+        });
         list.appendChild(head);
       }
       for (const { v, info } of g.items) {
@@ -519,6 +523,7 @@ function renderJobRow(job) {
       del.disabled = busy;
       del.title = busy ? "Busy: stop the job first" : "Delete";
     }
+    if (li.dataset.group) updateGroupBusy(li.dataset.group);
   }
 
   if (job.kind === "analyze" && vid === currentVideoId) {
@@ -624,41 +629,85 @@ async function reanalyzeVideo(videoId) {
   }
 }
 
-async function deleteVideo(videoId) {
-  if (!confirm(`Delete ${videoId}?`)) return;
-
+// Delete one game on the server and drop it from the page state. Returns
+// null on success or an error message; callers refresh the library.
+async function removeVideo(videoId) {
+  let data;
   try {
     const res = await fetch("/api/delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ videoId }),
     });
-    const data = await res.json();
-    if (data.error) {
-      alert(`Delete failed: ${data.error}`);
-      return;
-    }
-    if (data.deleted) {
-      // If currently playing this video, clear player
-      if (currentVideoId === videoId) {
-        currentVideoId = null;
-        const video = document.getElementById("video");
-        video.pause();
-        video.removeAttribute("src");
-        video.load();
-        player.clear();
-        document.getElementById("video-title").textContent = "";
-        document.title = "Werewolf Viewer";
-      }
-      jobSnapshot.delete(videoId);
-      await refreshDownloadedState();
-      loadVideoList();
-      // The search result (if shown) becomes downloadable again
-      updateButtonState(videoId, "idle");
-    }
+    data = await res.json();
   } catch (err) {
-    alert(`Delete failed: ${err.message}`);
+    return err.message;
   }
+  if (data.error) return data.error;
+  if (!data.deleted) return "not deleted";
+  // If currently playing this video, clear player
+  if (currentVideoId === videoId) {
+    currentVideoId = null;
+    const video = document.getElementById("video");
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    player.clear();
+    document.getElementById("video-title").textContent = "";
+    document.title = "Werewolf Viewer";
+  }
+  jobSnapshot.delete(videoId);
+  // The search result (if shown) becomes downloadable again
+  updateButtonState(videoId, "idle");
+  return null;
+}
+
+async function deleteVideo(videoId) {
+  const title = document.querySelector(`#video-list li[data-id="${videoId}"]`)?.dataset.title || videoId;
+  if (!confirm(`Delete ${title}?`)) return;
+  const err = await removeVideo(videoId);
+  if (err) {
+    alert(`Delete failed: ${err}`);
+    return;
+  }
+  await refreshDownloadedState();
+  loadVideoList();
+}
+
+// The × on an episode header: every game of the episode after one
+// confirmation. Games with a running job are kept (the server would refuse
+// them anyway) and said so up front.
+async function deleteEpisode(key, items) {
+  const isBusy = ({ v }) => { const j = jobSnapshot.get(v.id); return !!j && !j.done; };
+  const kept = items.filter(isBusy);
+  const targets = items.filter((it) => !isBusy(it));
+  if (!targets.length) {
+    alert(`Every game in ${key} is being downloaded or analyzed. Stop those jobs first.`);
+    return;
+  }
+  const label = ({ v, info }) => (info?.gameLabel ? `${info.gameLabel} ${info.config}`.trim() : v.title);
+  const lines = targets.map((it) => `• ${label(it)}`).join("\n");
+  const note = kept.length ? `\n\n${kept.length} game${kept.length === 1 ? "" : "s"} with a running job will be kept.` : "";
+  if (!confirm(`Delete ${targets.length} game${targets.length === 1 ? "" : "s"} of ${key}?\n\n${lines}${note}`)) return;
+  const failed = [];
+  for (const it of targets) {
+    const err = await removeVideo(it.v.id);
+    if (err) failed.push(`${label(it)}: ${err}`);
+  }
+  await refreshDownloadedState();
+  loadVideoList();
+  if (failed.length) alert(`Could not delete:\n${failed.join("\n")}`);
+}
+
+// Episode header × is disabled while any game of the episode has a job
+function updateGroupBusy(key) {
+  const head = document.querySelector(`#video-list li.lib-group[data-group="${key}"]`);
+  if (!head) return;
+  const busy = !!document.querySelector(`#video-list li.lib-item[data-group="${key}"].busy`);
+  const del = head.querySelector(".lib-group-del");
+  if (!del) return;
+  del.disabled = busy;
+  del.title = busy ? "Busy: a game in this episode is being downloaded or analyzed" : "Delete every game in this episode";
 }
 
 // ── Init ──

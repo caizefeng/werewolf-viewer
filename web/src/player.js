@@ -505,8 +505,9 @@ export class WerewolfPlayer {
   // (假面, a 混血儿 that copied a wolf, roles added later).
   _isWolf(x) {
     if (x && typeof x === "object") {
-      if (x.faction === "wolf" || x.faction === "good") return x.faction === "wolf";
-      return this._isWolf(x.role);
+      // Colour can only ADD a wolf (假面, 盗宝大师, 九尾, 诡术师 …); a name with
+      // 狼 in it is wolf-side whatever the measured ribbon said
+      return x.faction === "wolf" || this._isWolf(x.role);
     }
     return !!x && x.includes("\u72fc");
   }

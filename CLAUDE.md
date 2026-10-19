@@ -292,13 +292,16 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   机械 maps to 机械狼: the panel names the wolf, whatever it learned, and the wolf team includes it
 - **Faction from ribbon colour** (`_ribbon_colour` in ocr_items_in_frame, medians per row in
   _cluster_rows, `faction: "wolf" | "good" | ""` per role_map entry): the broadcast paints wolf
-  ribbons red and everyone else green (S23) or cream (S22 villagers). Each vertical label box is
-  grown 30% sideways / 25% vertically and the fractions of red-hued and green-hued saturated pixels
-  (S>60, V>35) counted; wolf = red >= RIBBON_RED_MIN (0.2) and red > green. Measured S22/S23:
-  wolves red 0.23-0.61 (green <= 0.08), others green 0.33-0.68 or cream (both < 0.13), red <= 0.17
-  except where a red badge intrudes (green still wins). The viewer's wolf team (`_isWolf(player)`)
-  uses faction when present and falls back to the name containing 狼, so wolf-side roles whose
-  names do not say wolf (假面; a 混血儿 that copied a wolf shows red) join the pack
+  ribbons red and everyone else green (S23) or cream (S22 villagers). The measured box is the
+  label box **narrowed 15% per side and grown 25% vertically** (the ribbon core); the fractions
+  of red-hued and green-hued saturated pixels (S>60, V>35) are counted; wolf = red >=
+  RIBBON_RED_MIN (0.2) and red > green. Measured with that box on four S22/S23 games: wolves red
+  0.43-0.69 (green <= 0.02), every good-side ribbon red <= 0.01. The first version grew the box
+  30% SIDEWAYS and caught the red vote/badge markers beside a ribbon early in a game; on cream
+  S22 villagers no green outvotes them, so two 平民 of S22E41 G2 came out "wolf" (user report
+  2026-10-19). The viewer's `_isWolf(player)` is faction == "wolf" OR the name contains 狼: colour
+  only ever adds wolf-side roles whose names do not say wolf (假面, 盗宝大师, 九尾, 诡术师) and can
+  never demote a named wolf (one S22 机械狼 ribbon measured no red at all)
 - **Every seat is in the role map, recognised or not** (build_role_map): seats 1-6 / 7-12 get their
   band from a 6-row layout fitted by least squares to the rows that were read (_fit_layout:
   first-row centre + pitch, sanity ranges LAYOUT_PITCH_RANGE / LAYOUT_FIRST_RANGE, constants
@@ -363,6 +366,9 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   is a per-video override. With no detected night phases masks stay on throughout (a detection
   failure must not leak)
 - **Mute button** beside the volume slider; volume/mute persist per browser
+- Headless UI checks run with Playwright installed in `processing/venv` (`processing/venv/bin/pip install playwright`;
+  the chromium-headless-shell lives in ~/Library/Caches/ms-playwright). A scratch venv under /tmp decayed after
+  three days (macOS purges unused /tmp files), which is why it moved here (2026-10-19)
 - UI gotchas found by headless inspection (Playwright chromium-headless-shell works in this session;
   Google Chrome headless does not): (1) #role-panel must keep overflow visible -- its ROLES tab and
   hover trigger are ::after/::before placed outside the box, and overflow-y:auto clipped them so the

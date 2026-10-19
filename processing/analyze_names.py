@@ -52,13 +52,17 @@ ROLE_ALIASES = {"自神": "白神"}   # S22 ribbon font: 白 read as 自 in ever
 
 # Faction from the ribbon colour behind a label: the broadcast paints wolf
 # ribbons red and everyone else's green (S23 gods and villagers) or cream
-# (S22 villagers). Measured on S22/S23 frames (box grown 30% sideways and
-# 25% vertically to take in ribbon around the glyphs): wolves red 0.23-0.61
-# with green <= 0.08; others green 0.33-0.68 or (cream) both < 0.13, red at
-# most 0.17 except where a red badge intrudes (then green still wins). So
-# wolf = red >= RIBBON_RED_MIN and red > green. This is what tells the
-# reveal panel who is on the wolf team when the role name does not say 狼
-# (假面, 混血儿 that copied a wolf, future roles).
+# (S22 villagers). The box measured is the label box narrowed 15% on each
+# side and grown 25% vertically: the ribbon core behind and around the
+# glyphs, never the column next to it. A box grown sideways picked up the
+# red vote/badge markers that sit beside a ribbon early in a game, and on a
+# cream S22 villager there is no green to outvote them, so two 平民 came out
+# "wolf" (S22E41 G2, first 8 scan frames red ~0.31). Measured with the core
+# box over four S22/S23 games: wolves red 0.43-0.69 (green <= 0.02), every
+# good-side ribbon red <= 0.01. So wolf = red >= RIBBON_RED_MIN and red >
+# green. The viewer ORs this with the role name containing 狼, so colour
+# only ever ADDS wolf-side roles whose names do not say wolf (假面, 盗宝大师,
+# 九尾, 诡术师) and can never demote a named wolf.
 RIBBON_RED_MIN = 0.2
 
 # Standard 12-player sidebar layout: seats 1-6 top-to-bottom on the left,
@@ -177,9 +181,10 @@ def ocr_items_in_frame(ocr, frame, edge_ratio=0.30, min_score=0.5):
     return items
 
 
-def _ribbon_colour(frame, x0, y0, x1, y1, grow_x=0.3, grow_y=0.25):
+def _ribbon_colour(frame, x0, y0, x1, y1, grow_x=-0.15, grow_y=0.25):
     """Fractions of red-hued and green-hued saturated pixels in a label box
-    grown by (grow_x, grow_y) of its size, i.e. the ribbon behind the text."""
+    grown by (grow_x, grow_y) of its size (negative = shrunk): the ribbon
+    core behind and just above/below the text, not the column beside it."""
     h, w = frame.shape[:2]
     bw, bh = x1 - x0, y1 - y0
     xa, xb = max(0, int(x0 - grow_x * bw)), min(w, int(x1 + grow_x * bw))

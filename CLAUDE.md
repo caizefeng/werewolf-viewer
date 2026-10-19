@@ -301,7 +301,10 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   S22 villagers no green outvotes them, so two 平民 of S22E41 G2 came out "wolf" (user report
   2026-10-19). The viewer's `_isWolf(player)` is faction == "wolf" OR the name contains 狼: colour
   only ever adds wolf-side roles whose names do not say wolf (假面, 盗宝大师, 九尾, 诡术师) and can
-  never demote a named wolf (one S22 机械狼 ribbon measured no red at all)
+  never demote a named wolf; build_role_map stores faction "wolf" for any role name containing 狼
+  regardless of colour, because S22 recolours a 机械狼's ribbon over the game (cream while it has
+  learned a villager -- "学3机械平民" on S22E41 G3 seat 2 at 20 min -- red once it holds the knife
+  at 40 min), so an early scan can see no red at all
 - **Every seat is in the role map, recognised or not** (build_role_map): seats 1-6 / 7-12 get their
   band from a 6-row layout fitted by least squares to the rows that were read (_fit_layout:
   first-row centre + pitch, sanity ranges LAYOUT_PITCH_RANGE / LAYOUT_FIRST_RANGE, constants

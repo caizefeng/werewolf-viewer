@@ -557,8 +557,13 @@ def build_role_map(all_items, all_regions):
                 why = "taken" if seats[i] in found else f"outside {lo}-{hi}"
                 print(f"  Dropping {side} row '{row['role']}' at y={row['yc']:.2f}: seat {seats[i]} is {why}")
                 continue
+            # A role whose name says 狼 is wolf-side whatever the ribbon measured:
+            # S22 recolours a 机械狼's ribbon over the game (cream while it has
+            # learned a villager, red once it holds the knife), so an early scan
+            # can see no red at all
+            faction = "wolf" if "\u72fc" in row["role"] else row.get("faction", "")
             found[seats[i]] = {"role": row["role"], "label": (row["ty0"], row["ty1"]), "yc": row["yc"],
-                               "faction": row.get("faction", "")}
+                               "faction": faction}
 
     first, pitch = _fit_layout([((seat - 1) % 6, f["yc"]) for seat, f in found.items()])
     role_map = {"left": [], "right": []}

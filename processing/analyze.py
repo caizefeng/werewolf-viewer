@@ -145,8 +145,12 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
     if keep_edits and os.path.exists(metadata_path):
         with open(metadata_path, encoding="utf-8") as f:
             metadata = _keep_edits(json.load(f), metadata)
-    with open(metadata_path, "w", encoding="utf-8") as f:
+    # Written via a temp file + rename: the server may serve metadata.json to
+    # a viewer at any moment (re-analysis of a game someone is watching)
+    tmp_path = metadata_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, metadata_path)
 
     print("=" * 60)
     print(f"Analysis complete!")

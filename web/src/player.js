@@ -1115,7 +1115,7 @@ export class WerewolfPlayer {
     };
 
     sorted.forEach((phase, i) => {
-      flushCards(phase.start + 1);
+      flushCards(phase.start);
       const group = document.createElement("div");
       group.className = "night-jump-group";
 

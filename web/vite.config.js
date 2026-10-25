@@ -247,6 +247,32 @@ function blockCrossOrigin(req, res) {
 
 const MAX_BODY_BYTES = 1_000_000;
 
+// ── Viewer state: bookmark flag + resume point per game ──
+// Stored next to the video (videos/<id>/viewer_state.json) so it is shared
+// by every device on the LAN, untouched by re-analysis (which rewrites only
+// metadata.json) and removed together with the game.
+const VIEWER_STATE_FILE = "viewer_state.json";
+const MAX_MEDIA_SECONDS = 48 * 3600;
+
+function readViewerState(dir) {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(dir, VIEWER_STATE_FILE), "utf-8"));
+    return s && typeof s === "object" && !Array.isArray(s) ? s : {};
+  } catch {
+    return {};
+  }
+}
+
+// What /api/videos exposes per game and /api/state answers with
+function viewerStateView(s) {
+  return {
+    bookmarked: s.bookmarked === true,
+    position: Number.isFinite(s.position) ? s.position : null,
+    duration: Number.isFinite(s.duration) ? s.duration : null,
+    watchedAt: Number.isFinite(s.watchedAt) ? s.watchedAt : null,
+  };
+}
+
 // Parse a JSON body. Resolves null (after answering 413) when the body is
 // over the cap, so handlers must bail out on null.
 function readBody(req, res) {
@@ -313,7 +339,7 @@ export default defineConfig({
                     const meta = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf-8"));
                     hiddenRoles = !!meta.hidden_roles;
                   } catch {}
-                  return { id: d.name, title, hiddenRoles };
+                  return { id: d.name, title, hiddenRoles, ...viewerStateView(readViewerState(dir)) };
                 });
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify(dirs));
@@ -476,6 +502,50 @@ export default defineConfig({
               fs.writeFileSync(tmpPath, JSON.stringify(meta, null, 2));
               fs.renameSync(tmpPath, metaPath);
               return jsonResponse(res, 200, { saved: true });
+            } catch (err) {
+              return jsonResponse(res, 500, { error: err.message });
+            }
+          }
+
+          // API: update a game's viewer state (body: {videoId, bookmarked?,
+          // position?, duration?}); fields are merged into viewer_state.json.
+          // The read-modify-write below is synchronous, so two requests can't
+          // interleave and lose each other's fields.
+          if (url === "/api/state" && req.method === "POST") {
+            if (blockCrossOrigin(req, res)) return;
+            const body = await readBody(req, res);
+            if (!body) return;
+            const { videoId, bookmarked, position, duration } = body;
+            if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
+            const dir = path.join(videosDir, videoId);
+            if (!fs.existsSync(path.join(dir, "video.mp4"))) return jsonResponse(res, 404, { error: "Not found" });
+            const update = {};
+            if (bookmarked !== undefined) {
+              if (typeof bookmarked !== "boolean") return jsonResponse(res, 400, { error: "bookmarked must be true or false" });
+              update.bookmarked = bookmarked;
+              update.bookmarkedAt = bookmarked ? Date.now() : null;
+            }
+            if (duration !== undefined && position === undefined) {
+              return jsonResponse(res, 400, { error: "duration is only accepted with position" });
+            }
+            if (position !== undefined) {
+              const ok = (x) => typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= MAX_MEDIA_SECONDS;
+              if (!ok(position)) return jsonResponse(res, 400, { error: "position must be seconds between 0 and 48h" });
+              if (duration !== undefined && (!ok(duration) || duration === 0)) {
+                return jsonResponse(res, 400, { error: "duration must be seconds between 0 and 48h" });
+              }
+              update.position = Math.round(position * 10) / 10;
+              if (duration !== undefined) update.duration = Math.round(duration * 10) / 10;
+              update.watchedAt = Date.now();
+            }
+            if (!Object.keys(update).length) return jsonResponse(res, 400, { error: "Nothing to update" });
+            try {
+              const statePath = path.join(dir, VIEWER_STATE_FILE);
+              const state = { ...readViewerState(dir), ...update };
+              const tmpPath = statePath + ".tmp";
+              fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+              fs.renameSync(tmpPath, statePath);
+              return jsonResponse(res, 200, { videoId, ...viewerStateView(state) });
             } catch (err) {
               return jsonResponse(res, 500, { error: err.message });
             }

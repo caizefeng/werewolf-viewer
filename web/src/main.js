@@ -76,6 +76,237 @@ function toggleGroup(key) {
   document.querySelectorAll(`#video-list li.lib-item[data-group="${key}"]`).forEach((li) => li.classList.toggle("hidden", collapsed));
 }
 
+// ── Bookmarks and resume points ──
+// Per-game viewer state lives on the server (videos/<id>/viewer_state.json,
+// POST /api/state) so it follows the user across devices on the LAN.
+// libState: videoId -> {bookmarked, position, duration, watchedAt}
+const libState = new Map();
+const RESUME_MIN = 30;                       // s; earlier positions count as "not started"
+const FILTER_KEY = "werewolf.libfilter.starred";
+
+function isFinished(s) {
+  if (!s || !Number.isFinite(s.position) || !Number.isFinite(s.duration) || s.duration <= 0) return false;
+  return s.position >= s.duration - 60 || s.position / s.duration >= 0.97;
+}
+
+// Where a game resumes, or null when it was never really started or was
+// watched to the end (then it opens from the beginning again)
+function resumePoint(s) {
+  if (!s || !Number.isFinite(s.position) || s.position < RESUME_MIN || isFinished(s)) return null;
+  return s.position;
+}
+
+function fmtTime(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = h ? String(m).padStart(2, "0") : String(m);
+  return `${h ? h + ":" : ""}${mm}:${String(sec).padStart(2, "0")}`;
+}
+
+// Star, resume chip and progress line of one library row from libState
+function renderRowState(li) {
+  const s = libState.get(li.dataset.id) || {};
+  const on = !!s.bookmarked;
+  li.classList.toggle("starred", on);
+  const star = li.querySelector(".video-star");
+  if (star) {
+    star.textContent = on ? "\u2605" : "\u2606";
+    star.setAttribute("aria-pressed", String(on));
+    star.title = on ? "Remove bookmark" : "Bookmark this game";
+  }
+  const at = resumePoint(s);
+  const done = isFinished(s);
+  let meta = li.querySelector(".video-meta");
+  let chip = li.querySelector(".video-resume");
+  if (at !== null || done) {
+    if (!meta) {
+      meta = document.createElement("span");
+      meta.className = "video-meta";
+      li.insertBefore(meta, li.querySelector(".video-re-btn"));
+    }
+    if (!chip) {
+      chip = document.createElement("span");
+      chip.className = "video-resume";
+      meta.appendChild(chip);
+    }
+    chip.classList.toggle("done", done);
+    chip.textContent = done ? "\u2713 watched" : `\u25B6 ${fmtTime(at)}`;
+    chip.title = done ? "Watched to the end; opens from the start" : `Resumes at ${fmtTime(at)}`;
+  } else if (chip) {
+    chip.remove();
+    if (meta && !meta.children.length) meta.remove();
+  }
+  let bar = li.querySelector(".video-progress");
+  if (at !== null && Number.isFinite(s.duration) && s.duration > 0) {
+    if (!bar) {
+      bar = document.createElement("span");
+      bar.className = "video-progress";
+      bar.appendChild(document.createElement("span"));
+      li.appendChild(bar);
+    }
+    bar.firstChild.style.width = `${Math.min(100, (at / s.duration) * 100).toFixed(1)}%`;
+  } else if (bar) {
+    bar.remove();
+  }
+}
+
+// "★ n" on an episode header (kept visible when the group is collapsed)
+function updateGroupStars(key) {
+  if (!key) return;
+  const head = document.querySelector(`#video-list li.lib-group[data-group="${key}"]`);
+  if (!head) return;
+  const n = document.querySelectorAll(`#video-list li.lib-item.starred[data-group="${key}"]`).length;
+  head.classList.toggle("has-starred", n > 0);
+  const el = head.querySelector(".lib-group-stars");
+  if (el) {
+    el.textContent = n ? `\u2605\u2009${n}` : "";
+    el.title = n ? `${n} bookmarked` : "";
+  }
+}
+
+// The "bookmarked only" filter shows a hint when nothing is bookmarked
+function updateFilterEmpty() {
+  const list = document.getElementById("video-list");
+  list.classList.toggle("no-starred", !list.querySelector("li.lib-item.starred"));
+}
+
+function setLibraryFilter(on) {
+  const list = document.getElementById("video-list");
+  const btn = document.getElementById("lib-filter-btn");
+  list.classList.toggle("only-starred", on);
+  btn.classList.toggle("active", on);
+  btn.setAttribute("aria-pressed", String(on));
+  btn.textContent = on ? "\u2605" : "\u2606";
+  btn.title = on ? "Showing bookmarked games only (click to show all)" : "Show bookmarked games only";
+  try { localStorage.setItem(FILTER_KEY, on ? "1" : "0"); } catch {}
+  updateFilterEmpty();
+}
+
+function renderBookmarkBtn() {
+  const btn = document.getElementById("bookmark-btn");
+  const on = !!(currentVideoId && libState.get(currentVideoId)?.bookmarked);
+  btn.hidden = !currentVideoId;
+  btn.textContent = on ? "\u2605" : "\u2606";
+  btn.classList.toggle("on", on);
+  btn.setAttribute("aria-pressed", String(on));
+  btn.title = on ? "Remove bookmark (B)" : "Bookmark this game (B)";
+}
+
+// Merge a patch into a game's local state and refresh every place it shows
+function setLocalState(videoId, patch) {
+  libState.set(videoId, { ...(libState.get(videoId) || {}), ...patch });
+  const li = document.querySelector(`#video-list li.lib-item[data-id="${videoId}"]`);
+  if (li) {
+    renderRowState(li);
+    updateGroupStars(li.dataset.group);
+  }
+  updateFilterEmpty();
+  if (videoId === currentVideoId) renderBookmarkBtn();
+}
+
+async function toggleBookmark(videoId) {
+  const next = !libState.get(videoId)?.bookmarked;
+  setLocalState(videoId, { bookmarked: next });          // optimistic
+  try {
+    const res = await fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoId, bookmarked: next }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    setLocalState(videoId, { bookmarked: data.bookmarked });
+  } catch (err) {
+    setLocalState(videoId, { bookmarked: !next });
+    statusText(`Bookmark not saved: ${err.message}`);
+  }
+}
+
+// Resume points: saved while the user actually watches (play, or a seek
+// they made) -- merely opening a game writes nothing. Saves every 5s while
+// playing, on pause/end, shortly after a seek, when switching games and when
+// the page is hidden or closed (keepalive fetch survives the unload).
+const watch = { videoId: null, engaged: false, resuming: false, lastSaveAt: 0, lastPos: null, seekTimer: null };
+
+function savePosition() {
+  const id = watch.videoId;
+  if (!id || !watch.engaged || id !== currentVideoId) return;
+  const video = document.getElementById("video");
+  const position = video.currentTime;
+  const duration = video.duration;
+  if (!Number.isFinite(position) || !Number.isFinite(duration) || duration <= 0) return;
+  if (watch.lastPos !== null && Math.abs(position - watch.lastPos) < 0.5) return;
+  watch.lastPos = position;
+  watch.lastSaveAt = Date.now();
+  setLocalState(id, { position, duration, watchedAt: Date.now() });
+  fetch("/api/state", {
+    method: "POST",
+    keepalive: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId: id, position, duration }),
+  }).catch(() => {});
+}
+
+function showResumeNote(at) {
+  document.getElementById("resume-text").textContent = `Resumed at ${fmtTime(at)}`;
+  document.getElementById("resume-note").hidden = false;
+}
+
+function hideResumeNote() {
+  document.getElementById("resume-note").hidden = true;
+}
+
+function initWatchState() {
+  const video = document.getElementById("video");
+  video.addEventListener("play", () => {
+    if (watch.videoId && watch.videoId === currentVideoId) watch.engaged = true;
+  });
+  video.addEventListener("timeupdate", () => {
+    if (!video.paused && Date.now() - watch.lastSaveAt > 5000) savePosition();
+  });
+  video.addEventListener("pause", savePosition);
+  video.addEventListener("ended", savePosition);
+  video.addEventListener("seeked", () => {
+    if (watch.resuming) {          // our own jump to the resume point
+      watch.resuming = false;
+      return;
+    }
+    if (!watch.videoId || watch.videoId !== currentVideoId) return;
+    watch.engaged = true;
+    hideResumeNote();
+    clearTimeout(watch.seekTimer);
+    watch.seekTimer = setTimeout(savePosition, 800);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") savePosition();
+  });
+  window.addEventListener("pagehide", savePosition);
+
+  document.getElementById("start-over-btn").addEventListener("click", () => {
+    hideResumeNote();
+    video.currentTime = 0;              // the seeked handler records it
+  });
+  document.getElementById("bookmark-btn").addEventListener("click", () => {
+    if (currentVideoId) toggleBookmark(currentVideoId);
+  });
+  // B toggles the open game's bookmark (not while typing in a field)
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if ((e.key === "b" || e.key === "B") && currentVideoId) {
+      e.preventDefault();
+      toggleBookmark(currentVideoId);
+    }
+  });
+  const filterBtn = document.getElementById("lib-filter-btn");
+  let filterOn = false;
+  try { filterOn = localStorage.getItem(FILTER_KEY) === "1"; } catch {}
+  setLibraryFilter(filterOn);
+  filterBtn.addEventListener("click", () => {
+    setLibraryFilter(!document.getElementById("video-list").classList.contains("only-starred"));
+  });
+}
+
 async function loadVideoList() {
   const list = document.getElementById("video-list");
   try {
@@ -93,6 +324,10 @@ async function loadVideoList() {
       const ka = sortKey(a.title), kb = sortKey(b.title);
       return ka.prefix.localeCompare(kb.prefix, "zh") || ka.game - kb.game;
     });
+    libState.clear();
+    for (const v of videos) {
+      libState.set(v.id, { bookmarked: !!v.bookmarked, position: v.position, duration: v.duration, watchedAt: v.watchedAt });
+    }
 
     // Group by episode: one header per SxxEyy (with its broadcast date and
     // game count), one short row per game. Titles repeat the episode four
@@ -112,7 +347,7 @@ async function loadVideoList() {
         const head = document.createElement("li");
         head.className = "lib-group" + (isGroupCollapsed(g.key) ? " collapsed" : "");
         head.dataset.group = g.key;
-        head.innerHTML = `<span class="lib-group-name"></span><span class="lib-group-date"></span><span class="lib-group-count"></span><button class="video-del-btn lib-group-del" title="Delete every game in this episode">×</button><span class="lib-group-chev">▾</span>`;
+        head.innerHTML = `<span class="lib-group-name"></span><span class="lib-group-date"></span><span class="lib-group-stars"></span><span class="lib-group-count"></span><button class="video-del-btn lib-group-del" title="Delete every game in this episode">×</button><span class="lib-group-chev">▾</span>`;
         head.querySelector(".lib-group-name").textContent = g.key;
         head.querySelector(".lib-group-date").textContent = formatBroadcastDate(g.date);
         head.querySelector(".lib-group-count").textContent = `${g.items.length} game${g.items.length === 1 ? "" : "s"}`;
@@ -169,29 +404,58 @@ async function loadVideoList() {
           reanalyzeVideo(v.id);
         });
 
+        const starBtn = document.createElement("button");
+        starBtn.className = "video-star";
+        starBtn.type = "button";
+        starBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleBookmark(v.id);
+        });
+
+        li.appendChild(starBtn);
         li.appendChild(titleSpan);
         if (v.hiddenRoles) {
           // The broadcast hides roles itself: masks/reveal are off for this one
           li.classList.add("hidden-roles");
+          const meta = document.createElement("span");
+          meta.className = "video-meta";
           const badge = document.createElement("span");
           badge.className = "video-badge";
           badge.textContent = "hidden roles";
           badge.title = "Hidden-roles broadcast: the show keeps roles as \u672a\u77e5 and reveals them as the game goes; masks and role reveal are off";
-          li.appendChild(badge);
+          meta.appendChild(badge);
+          li.appendChild(meta);
         }
         li.appendChild(reBtn);
         li.appendChild(delBtn);
         li.addEventListener("click", () => switchVideo(v.id));
         list.appendChild(li);
+        renderRowState(li);
       }
+      updateGroupStars(g.key);
     }
+
+    // Shown by CSS only while the "bookmarked only" filter is on and empty
+    const empty = document.createElement("li");
+    empty.className = "lib-empty";
+    empty.textContent = "No bookmarks yet. Tap \u2606 on a game to keep it here.";
+    list.appendChild(empty);
+    updateFilterEmpty();
 
     // Rows whose video has a running job show it (spinner, disabled buttons)
     applyJobStates();
 
-    // Auto-select first if none selected
+    // On load, open the game being watched most recently (it resumes where
+    // it was left); with nothing in progress, the first bookmarked game (the
+    // one marked to watch next); else the first game
     if (!currentVideoId && videos.length > 0) {
-      switchVideo(videos[0].id);
+      const inProgress = videos
+        .filter((v) => resumePoint(v) !== null)
+        .sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0));
+      const firstStarred = videos.find((v) => v.bookmarked);
+      switchVideo((inProgress[0] || firstStarred || videos[0]).id);
+    } else if (currentVideoId) {
+      renderBookmarkBtn();
     }
   } catch (err) {
     list.innerHTML = `<li style="color:#52525b">Failed to load: ${err.message}</li>`;
@@ -200,7 +464,12 @@ async function loadVideoList() {
 
 async function switchVideo(videoId) {
   if (videoId === currentVideoId) return;
+  savePosition();                       // the game being left keeps its place
+  clearTimeout(watch.seekTimer);
   currentVideoId = videoId;
+  Object.assign(watch, { videoId, engaged: false, resuming: false, lastSaveAt: 0, lastPos: null });
+  hideResumeNote();
+  renderBookmarkBtn();
 
   // Update active state in sidebar
   document.querySelectorAll("#video-list li").forEach((li) => {
@@ -223,7 +492,17 @@ async function switchVideo(videoId) {
   player.videoId = videoId;
   const loaded = await player.loadMetadata(`/${videoId}/metadata.json`);
   if (loaded) {
+    const at = resumePoint(libState.get(videoId));
     player.loadVideo(`/${videoId}/video.mp4`);
+    if (at !== null) {
+      const video = document.getElementById("video");
+      video.addEventListener("loadedmetadata", () => {
+        if (currentVideoId !== videoId) return;
+        watch.resuming = true;
+        video.currentTime = at;
+        showResumeNote(at);
+      }, { once: true });
+    }
   } else {
     document.getElementById("status").textContent =
       "Run analyze.py to generate metadata";
@@ -657,6 +936,12 @@ async function removeVideo(videoId) {
     document.title = "Werewolf Viewer";
   }
   jobSnapshot.delete(videoId);
+  libState.delete(videoId);
+  if (watch.videoId === videoId) {
+    watch.videoId = null;
+    hideResumeNote();
+  }
+  renderBookmarkBtn();
   // The search result (if shown) becomes downloadable again
   updateButtonState(videoId, "idle");
   return null;
@@ -714,8 +999,9 @@ function updateGroupBusy(key) {
 
 async function init() {
   player = new WerewolfPlayer(getElements());
+  initWatchState();
 
-  // Load video list and auto-select first
+  // Load the library and open the game in progress (or the first)
   await loadVideoList();
 
   // Refresh button

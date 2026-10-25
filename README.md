@@ -51,6 +51,14 @@ Some games are broadcast with roles shown as 未知 until the show reveals them.
 
 ![A hidden-roles game: badge in the library, masks off, explanation in the role panel](docs/screenshots/hidden-roles.png)
 
+### Bookmarks and resume points
+
+Star any game in the library to keep it at hand, whether you are about to watch it or are halfway through. Episode headers count their starred games, even when collapsed, and the ☆ button above the list narrows it to bookmarked games only. The open game has its own star in the info bar, and `B` toggles it.
+
+The viewer also remembers where you stopped. A game you were watching shows its resume time and a thin progress line in the library, reopens at that point with a *Start over* option, and is the game the app opens when you come back; with nothing in progress, the app opens your first starred game. Games watched to the end are marked watched and start from the beginning. Bookmarks and resume points are stored by the server, so they follow you from the laptop to the phone.
+
+<img src="docs/screenshots/bookmarks.png" alt="Library with two starred games, star counts on the episode headers, and the open game showing its resume time and progress line" width="320">
+
 ### A library that fills itself
 
 Search the channel from the right-hand panel and press **Download**. Each row has its own Download/Stop button and progress bars, several jobs run at once, and the rest queue behind the slot limits (3 downloads, 2 analyses by default). The library groups games by episode; each row has **↻** to re-run the analysis and **×** to delete.
@@ -72,6 +80,7 @@ Dragging a night boundary, resizing a mask from its inner edge, or using **✎ E
 | `M` | Toggle masks |
 | `N` / `Shift+N` | Next / previous night |
 | `F` | Fullscreen (masks follow the letterboxed video) |
+| `B` | Bookmark the open game |
 
 ## How it works
 
@@ -132,6 +141,16 @@ cd web && WEREWOLF_DEMO=1 WEREWOLF_VIDEOS_DIR=/tmp/demo-library pnpm exec vite -
 
 Search for `demo cup`, download the three games, and the real pipeline analyses them. This is how the screenshots above were made.
 
+## Tests
+
+Browser end-to-end tests drive the real UI with Playwright against a throwaway server on a copy of the demo library, so they never touch your own games:
+
+```bash
+pip install -r tests/requirements.txt && playwright install chromium   # once, in processing/venv
+python3 tests/e2e/run.py              # player regression walk + bookmarks/resume suite
+python3 tests/e2e/run.py bookmarks    # one suite
+```
+
 ## Project structure
 
 ```
@@ -148,6 +167,7 @@ werewolf-viewer/
 │   ├── vite.config.js          # dev server: API, job queue, file serving
 │   └── src/                    # main.js (library, search, jobs), player.js (player, masks, reveal), style.css
 ├── scripts/start.sh, stop.sh   # background server
+├── tests/e2e/                  # browser end-to-end tests (demo library, Playwright)
 ├── docs/screenshots/           # README images (demo games)
 └── videos/                     # downloaded games + metadata (gitignored)
 ```
@@ -156,7 +176,7 @@ werewolf-viewer/
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/videos` | Analysed games (with `hiddenRoles`) |
+| GET | `/api/videos` | Analysed games, with `hiddenRoles` and each game's bookmark and resume point |
 | GET | `/api/downloaded` | Every game directory with `hasVideo` / `hasMetadata` |
 | POST | `/api/search` | Search the channel, body `{query}` |
 | POST | `/api/download` | Queue download + analysis, body `{videoId}` |
@@ -165,6 +185,7 @@ werewolf-viewer/
 | POST | `/api/stop` | Stop one job, body `{videoId}` |
 | POST | `/api/delete` | Delete a game, body `{videoId}` (refused while its job runs) |
 | POST | `/api/metadata` | Save edited night phases and masks, body `{videoId, night_phases, name_masks}` |
+| POST | `/api/state` | Save a game's bookmark and resume point, body `{videoId, bookmarked?, position?, duration?}` |
 
 ## Tuning
 

@@ -28,7 +28,10 @@
         <aside id="sidebar-left" class="sidebar-panel">
           <div class="sidebar-panel-header">
             <span class="sidebar-panel-title">Library</span>
-            <button id="refresh-list" class="ctrl-btn" title="Refresh">↻</button>
+            <div class="sidebar-panel-actions">
+              <button id="lib-filter-btn" class="ctrl-btn" type="button" aria-pressed="false" title="Show bookmarked games only">☆</button>
+              <button id="refresh-list" class="ctrl-btn" title="Refresh">↻</button>
+            </div>
           </div>
           <ul id="video-list"></ul>
         </aside>
@@ -85,8 +88,15 @@
         </div>
 
         <div id="info-bar">
-          <span id="video-title" class="video-title-label"></span>
+          <span class="info-title">
+            <button id="bookmark-btn" class="bookmark-btn" type="button" aria-pressed="false" title="Bookmark this game (B)" hidden>☆</button>
+            <span id="video-title" class="video-title-label"></span>
+          </span>
           <span id="status" class="status"></span>
+          <span id="resume-note" class="resume-note" hidden>
+            <span id="resume-text"></span>
+            <button id="start-over-btn" class="resume-btn" type="button">Start over</button>
+          </span>
         </div>
       </div>
         <!-- Right sidebar: Search -->

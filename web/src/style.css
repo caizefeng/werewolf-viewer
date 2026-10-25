@@ -1584,8 +1584,18 @@ header h1::after {
 }
 
 #video-list li.lib-item {
-  padding-left: 1.1rem;
+  position: relative;
+  grid-template-columns: auto 1fr auto auto;
+  grid-template-areas:
+    "star title re del"
+    "star meta re del";
+  padding-left: 0.55rem;
 }
+
+#video-list li.lib-item > .video-title { grid-area: title; }
+#video-list li.lib-item > .video-meta { grid-area: meta; }
+#video-list li.lib-item > .video-del-btn { grid-area: del; }
+#video-list li.lib-item > .video-del-btn.video-re-btn { grid-area: re; }
 
 #video-list li.hidden {
   display: none;
@@ -1610,9 +1620,6 @@ header h1::after {
 }
 
 .video-badge {
-  grid-area: badge;
-  justify-self: start;
-  margin-top: 4px;
   font-size: 0.55rem;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -1622,4 +1629,247 @@ header h1::after {
   background: rgba(217, 173, 66, 0.12);
   border: 1px solid rgba(217, 173, 66, 0.35);
   color: var(--dawn-gold);
+}
+
+
+/* ── Bookmarks and resume points ──
+   A star column on every game row (faint outline until bookmarked, gold
+   when on), "★ n" on episode headers, a "bookmarked only" filter in the
+   library header, a resume chip + thin progress line on games in progress,
+   and the open game's star + "Resumed at …" note in the info bar. */
+.sidebar-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#lib-filter-btn.active {
+  color: var(--dawn-gold);
+  border-color: rgba(217, 173, 66, 0.45);
+  background: var(--dawn-dim);
+}
+
+.video-star {
+  grid-area: star;
+  width: 20px;
+  height: 20px;
+  margin-right: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.6;
+  cursor: pointer;
+  transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+#video-list li:hover .video-star {
+  opacity: 0.9;
+}
+
+.video-star:hover {
+  color: var(--dawn-gold);
+  transform: scale(1.15);
+}
+
+.video-star[aria-pressed="true"] {
+  color: var(--dawn-gold);
+  opacity: 1;
+  text-shadow: 0 0 6px rgba(217, 173, 66, 0.45);
+}
+
+/* Touch screens have no hover: keep the outline star findable */
+@media (hover: none) {
+  .video-star { opacity: 0.8; }
+}
+
+.video-star:focus-visible,
+.bookmark-btn:focus-visible,
+.resume-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.video-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.video-resume {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: #b8b0ff;
+}
+
+.video-resume.done {
+  color: var(--success);
+  opacity: 0.85;
+}
+
+.video-progress {
+  position: absolute;
+  left: calc(0.55rem + 21px + 0.3rem + 3px);
+  right: 0.75rem;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.video-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.lib-group-stars {
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--dawn-gold);
+}
+
+#video-list li.lib-empty {
+  display: none;
+  padding: 2rem 1.25rem;
+  text-align: center;
+  line-height: 1.6;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: default;
+  border: 0;
+}
+
+#video-list.only-starred li.lib-item:not(.starred),
+#video-list.only-starred li.lib-group:not(.has-starred) {
+  display: none;
+}
+
+#video-list.only-starred.no-starred li.lib-empty {
+  display: block;
+}
+
+.info-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 60%;
+}
+
+.info-title .video-title-label {
+  max-width: none;
+  min-width: 0;
+}
+
+.bookmark-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.bookmark-btn:hover {
+  color: var(--dawn-gold);
+  border-color: rgba(217, 173, 66, 0.35);
+}
+
+.bookmark-btn.on {
+  color: var(--dawn-gold);
+  text-shadow: 0 0 6px rgba(217, 173, 66, 0.45);
+}
+
+#bookmark-btn[hidden],
+.resume-note[hidden] {
+  display: none;
+}
+
+.resume-note {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.resume-btn {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.resume-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+/* Episode header stays on one line. #video-list li sets word-break:
+   break-all for long titles, which split "S01E01", the date and "2 games"
+   mid-word once the "★n" count joined the row; children never wrap now,
+   and only the date gives way (ellipsis) if fonts render wider */
+#video-list li.lib-group {
+  gap: 0.35rem;
+  padding-left: 0.65rem;
+  padding-right: 0.6rem;
+  word-break: normal;
+  white-space: nowrap;
+}
+
+#video-list li.lib-group > * {
+  flex-shrink: 0;
+}
+
+#video-list li.lib-group > .lib-group-date {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lib-group-stars:empty {
+  display: none;
+}
+
+/* The status line truncates instead of wrapping when the resume note
+   shares the info bar on a laptop-width player */
+#info-bar .status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

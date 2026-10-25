@@ -33,7 +33,11 @@ werewolf_viewer/
 │   └── <video-id>/
 │       ├── video.mp4      # Downloaded video file
 │       ├── info.json      # {title, video_id} from YouTube
-│       └── metadata.json  # {night_phases, name_masks} from analysis
+│       ├── metadata.json  # {night_phases, name_masks, role_map, ...} from analysis
+│       └── viewer_state.json  # {bookmarked, position, duration, ...} bookmark + resume point
+├── tests/                 # Browser end-to-end tests on the synthetic demo library
+│   ├── requirements.txt   # playwright
+│   └── e2e/               # harness.py, run.py, test_player.py, test_bookmarks.py
 └── web/                   # Vite + vanilla JS frontend
     ├── .node-version      # v24.14.0 (used by fnm)
     ├── package.json       # packageManager field pins pnpm version for corepack
@@ -382,7 +386,11 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   to fill the screen (UA !important rules; author CSS cannot resize it) and the video letterboxes
   inside, while masks are fractions of their container -- on a 16:10 MacBook screen every reveal
   gap drifted off its row. `_fitMasksToVideo` pins #name-masks to the video's content box on
-  fullscreenchange/resize/loadedmetadata and clears the inline geometry on exit
+  fullscreenchange/resize/loadedmetadata and clears the inline geometry on exit. (4) `#video-list li`
+  sets `word-break: break-all` for long titles; episode headers override it with `white-space:
+  nowrap` (only the date may ellipsize) -- without that, adding the "★n" count split "S01E01", the
+  date and "2 games" mid-word in the 260px sidebar. The bookmark suite asserts one-line headers and
+  info bar at 1600 and 1366 wide
 - **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
   metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
   outward to its frame edge (`_renderedBox`), hiding player avatars/names too; only the inner
@@ -425,6 +433,21 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   are kept and the dialog says so, and the button is disabled (updateGroupBusy) while any game of
   the episode is busy. removeVideo is the shared per-game delete used by both buttons. Rows keep data-id, and data-title holds the full title
   for the info bar. Titles without an SxxEyy code are listed ungrouped
+- **Bookmarks and resume points** (main.js "Bookmarks and resume points", 2026-10-25): every game
+  row has a star (faint outline, gold when bookmarked; clicking it never opens the game), episode
+  headers show "★ n" (also when collapsed), a ☆/★ filter button in the library header shows only
+  bookmarked games (remembered per browser, `werewolf.libfilter.starred`; empty filter shows a
+  hint), and the info bar has the open game's star (keyboard B). Resume points are recorded only
+  once the user engages -- plays, or seeks themselves -- (merely opening a game writes nothing):
+  every 5s while playing, on pause/end, 800ms after a seek, when switching games, and on
+  visibilitychange/pagehide via a keepalive fetch. A game with a point >= 30s that is not finished
+  (finished = within 60s of the end or >= 97%) shows "▶ 25:13" and a thin progress line in its
+  row, reopens there with "Resumed at … · Start over" in the info bar, and on load the app opens
+  the most recently watched game in progress, else the first bookmarked game (marked to watch
+  next), else the first game. Finished games show "✓ watched"
+  and open from the start. State is server-side (`viewer_state.json` next to the video, written
+  by POST /api/state) so it is shared by every device on the LAN; re-analysis does not touch it
+  (it only rewrites metadata.json) and deleting a game removes it with the directory
 - Info bar shows the open video's title (also set as the document title)
 - **Visual polish pass (2026-10-15, reviewed with headless screenshots at 1600x1000 and 1366x768)**:
   the occasional editing actions (+ Night phase, + Mask, Reset masks/nights) live in an **✎ Edit
@@ -442,7 +465,27 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Mute button (🔊/🔇) beside the volume slider. `userMuted` tracks a deliberate mute
   separately from the night auto-mute: dawn only unmutes if the user didn't mute, and
   unmuting during a night phase (masks on) takes effect at dawn rather than immediately
-- Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s, N=next night start, Shift+N=previous
+- Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s, N=next night start, Shift+N=previous,
+  B=bookmark the open game
+
+## Browser tests (tests/e2e)
+- `processing/venv/bin/python3 tests/e2e/run.py [player|bookmarks] [--fresh]` (Playwright in
+  processing/venv: `pip install -r tests/requirements.txt`). Each suite gets a **fresh copy of the
+  synthetic demo library** and its own Vite server on a free port (127.0.0.1, `WEREWOLF_DEMO=1`,
+  `WEREWOLF_VIDEOS_DIR`), so tests click, edit, bookmark, re-analyse and delete freely and never touch
+  videos/. The demo games are rendered and analysed by the real pipeline once and cached in
+  tests/.cache/ (gitignored; `--fresh` or deleting it re-analyses after pipeline changes)
+- `player`: regression walk of the core viewer (library grouping, masks and modes, per-seat frames,
+  role panel by role/seat with pack-wolf reveal, night overlay/auto-mute/jumps, mute, edit + reset
+  persistence, fullscreen mask fit, hidden-roles behaviour). `bookmarks`: the /api/state contract
+  (validation, 403/413, merge, 30 concurrent writers, corrupt file) and the UI (row/info-bar/B-key
+  stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
+  saves, switch and tab-close saves, watched games, another device, touch, survival of
+  re-analysis, deletion and re-download). The bookmark suite runs a re-analysis and a re-download,
+  so a full run takes several minutes
+- **Run mutating UI tests here, not against the real server**: the earlier scratch walks used the
+  real library and left `original_*` fields in metadata.json (which mark user corrections); the
+  scratch scripts under /tmp were also purged by macOS after a few days, hence the move into the repo
 
 ## Demo mode (synthetic broadcasts, no real footage)
 - `processing/demo/make_demo_video.py [OUT_DIR]` renders three made-up 12-player games with ffmpeg
@@ -458,7 +501,14 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   footage, titles or players appear in the repository
 
 ## API Endpoints (vite.config.js middleware)
-- `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag included for the library badge)
+- `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag for the library badge, plus the
+  viewer state: `bookmarked`, `position`, `duration`, `watchedAt`; nulls when absent; a corrupt
+  viewer_state.json reads as empty)
+- `POST /api/state` - merge viewer state into `videos/<id>/viewer_state.json` (body: {videoId,
+  bookmarked?: boolean, position?: seconds, duration?: seconds}; duration only with position; both
+  0..48h; 400 on anything else or an empty update, 404 if the game has no video.mp4, 403
+  cross-origin). The read-modify-write is synchronous (no interleaving) and written via tmp+rename.
+  Returns the merged state
 - `GET /api/downloaded` - list all video dirs with hasVideo/hasMetadata flags
 - `POST /api/search` - search @JCDSS channel via yt-dlp (body: {query}); in demo mode, the rendered catalogue. Merges two
   sources, deduped by id, both filtered by all query keywords: (1) the 200 most recent

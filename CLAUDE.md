@@ -223,7 +223,11 @@ The user watches games on the server while development goes on, so there are two
   diffs, motions, thumbs) so the rest of the pipeline can be iterated without the minutes-long scan
 - The scan also records `motions` (each 2 s sample reads the frame MOTION_DT = 0.25 s later and stores
   the mean change of 32x18 grey thumbnails: camera motion or a cut, for the card search) and `thumbs`
-  (the sample's 32x18 colour thumbnail, ~1.7 KB, for recognising the pre-tour set)
+  (the sample's 32x18 colour thumbnail, ~1.7 KB, for recognising the pre-tour set). Cost: none
+  measurable on a 1080p60 broadcast (300 s segment, one thread: 52.8 s vs 55.1 s without; decoding
+  dominates); +40% only on the synthetic demo games, which decode almost for free. The card
+  search's fine scans add ~10-25 s per candidate (usually 1-3), plus 1-2 OCR checks each.
+  Threaded and sequential scans give identical arrays (checked on the demo game)
 - **refine_boundaries**: a raw boundary from the 2s grid is only known to within one interval, which
   made the overlay lead vary between ~1s and ~4s. Each boundary window — (start−2s, start] for red-on,
   [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding
@@ -659,7 +663,7 @@ The user watches games on the server while development goes on, so there are two
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential).
+All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential). 2026-10-25, card-aware pipeline (one parallel run per game; scans cached in the session scratchpad and replayed with `analyze_phases(scan=...)`): GROUND_TRUTH 17/17, CARD_GROUND_TRUTH 28/28 games (31 tours), FIRST_NIGHT_GT 11/11 (S22 + two S23 hidden-roles games), and the night after every tour starts at its end 31/31. Threaded and sequential scans give identical arrays.
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05
@@ -747,7 +751,9 @@ Before the evidence-merge / bounded cut-merge changes these videos gave: E24G1 f
 entirely and second night split; E25G1/E25G2 one 13-50 minute "night" each.
 - xNDz6SStaLo (S23E24 第一局): 9:17 -- 13:13, 1:00:38 -- 1:03:46, 1:04:12 -- 1:05:55  (role map 12/12
   verified; the 26s day between the last two is a self-destruct: 天亮请睁眼 at 1:03:48, 天黑请闭眼 at 1:04:14)
-- QNxo5hmWLN0 (S23E24 第二局, hidden-roles): 7:03 -- 9:46, 1:28:33 -- 1:31:57, 1:32:21 -- 1:34:45
+- QNxo5hmWLN0 (S23E24 第二局, hidden-roles): 7:03 -- 9:46, 17:20 -- 21:50, 1:28:33 -- 1:31:57, 1:32:21 -- 1:34:45
+  (re-dealt: the first game was abandoned at its first dawn, commentators 9:46-16:39, second
+  看牌 16:39-17:20; that second night 1 is covered by the commentators and was missing before 2026-10-25)
   (24s self-destruct day; the red light after the 1:34:48 dawn banner is daytime)
 - bzsBWNpIwpo (S23E25 第一局): 11:10 -- 15:00, 1:04:06 -- 1:06:40, 1:12:19 -- 1:14:01  (role map 12/12)
 - fgw-4eUV0JE (S23E25 第二局, 诡术之境 config): 6:21 -- 10:24, 1:17:52 -- 1:20:54  (role map 12/12)
@@ -761,8 +767,13 @@ entirely and second night split; E25G1/E25G2 one 13-50 minute "night" each.
   - CBZfebaxD0E (第四局 机械狼通灵师): 8:08 -- 13:16, 58:51 -- 61:55, 69:48 -- 72:28 (day counter
     第一天/第二天/第三天 agrees); role map 12/12 after the vertical-label fix (the bare "机械狼" cut
     from the config line had added a phantom seat 7 and turned seat 3's 通灵师 into 平民)
-- Not benchmarked: pZ0vo8VRDkA (S23E24 第三局) and HpIM5xTU-t8 (S23E25 第三局) are hidden-roles
-  broadcasts that show almost no red table at night (wolf close-ups instead), so the red-light
-  signal yields a partial or empty night list (0 phases on E25G3). The viewer disables the night
-  overlay and masks for hidden-roles videos anyway, so only the jump markers are affected. A normal
-  game whose night had no red table shot at all would still be missed -- the remaining known limit.
+- pZ0vo8VRDkA (S23E24 第三局) and HpIM5xTU-t8 (S23E25 第三局) are hidden-roles broadcasts that show
+  almost no red table at night (commentators instead), so the red-light signal yields a partial or
+  empty night list (0 phases on E25G3 before 2026-10-25). Their FIRST nights are now found from the
+  card viewing (FIRST_NIGHT_GT): HpIM5xTU-t8 6:55-11:49; pZ0vo8VRDkA was re-dealt: first deal 8:04-9:00
+  (abandoned at that dawn; the table stays red until 9:00), second deal 看牌 13:47-14:22, night 1
+  14:22-18:13. Their LATER nights are still mostly missed: hidden-roles broadcasts cover every night
+  with the commentators (2-5 min runs of the pre-tour set mid-game in S22E47 G2/G3, S22E48 G1), which
+  could find them the same way -- not done yet. The viewer disables the night overlay and masks for
+  hidden-roles videos anyway, so only the jump markers are affected. A normal game whose later night
+  had no red table shot at all would still be missed

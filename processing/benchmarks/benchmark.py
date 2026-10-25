@@ -47,7 +47,9 @@ GROUND_TRUTH = {
         (557, 793), (3638, 3826), (3852, 3955),
     ],
     "QNxo5hmWLN0": [   # S23E24 第二局 (hidden-roles broadcast; overlay off in the viewer) -- 24s self-destruct day at 91:57; dawn banner 94:48
-        (423, 586), (5313, 5517), (5541, 5685),
+        # re-dealt: the first game was abandoned at its first dawn (9:46);
+        # the second deal's night 1 is covered by the commentators until 21:50
+        (423, 586), (1040, 1310), (5313, 5517), (5541, 5685),
     ],
     "bzsBWNpIwpo": [   # S23E25 第一局 (day 2 lasts only ~5.5 min)
         (670, 900), (3846, 4000), (4339, 4441),
@@ -99,6 +101,11 @@ FIRST_NIGHT_GT = {
     # No red light for night 1 at all; dawn is 13:17, and the night is ended at
     # the first sidebar sighting, ~35 s later
     "9Yij3uRUp1M": (524, 797, 40),
+    # S23 hidden-roles games whose first nights the red light never showed
+    # (none was detected before 2026-10-25): commentators until the dawn cut
+    "HpIM5xTU-t8": (416, 710, 0),    # S23E25 第三局: commentators until 11:49
+    "pZ0vo8VRDkA": (485, 540, 0),    # S23E24 第三局, first deal (abandoned at dawn, table red until 9:00);
+                                     # the second deal's night 1 is 14:22-18:13
 }
 
 TOLERANCE = 5  # seconds (ground truth approximate, buffer settings may differ)

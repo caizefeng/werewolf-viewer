@@ -175,7 +175,9 @@ export class WerewolfPlayer {
         this.metadata.original_name_masks ?? this.metadata.name_masks));
       this._defaultNightPhases = JSON.parse(JSON.stringify(
         this.metadata.original_night_phases ?? this.metadata.night_phases));
-      this.statusEl.textContent = `Loaded: ${this.metadata.night_phases.length} night phases, ${this.metadata.name_masks.length} mask regions`;
+      const cards = this.metadata.card_phases || [];
+      const cardNote = cards.length ? `看牌 at ${cards.map((c) => this._fmt(c.start)).join(" + ")}, ` : "";
+      this.statusEl.textContent = `Loaded: ${cardNote}${this.metadata.night_phases.length} night phases, ${this.metadata.name_masks.length} mask regions`;
       this.roleMap = this.metadata.role_map || {};
       this.hiddenRoles = !!this.metadata.hidden_roles;
       // Hidden-roles broadcasts (the show hides roles itself) start with
@@ -992,14 +994,13 @@ export class WerewolfPlayer {
       return;
     }
     // Role names appear in the sidebar once the first night ends, and the
-    // night overlay covers everything during nights. With no detected
-    // nights at all (detection failed, or none yet) stay masked throughout.
-    const phases = this.metadata?.night_phases || [];
-    let shouldShow = true;
-    if (phases.length) {
-      const first = phases.reduce((a, b) => (a.start <= b.start ? a : b));
-      shouldShow = t >= first.end && !this.isNight;
-    }
+    // night overlay covers everything during nights. The card viewing (看牌)
+    // ends as that night begins, so masks show from whichever ends first: a
+    // first night the analysis missed then cannot leave day 1 unmasked. With
+    // neither detected stay masked throughout.
+    const firstEnd = (list) => (list?.length ? list.reduce((a, b) => (a.start <= b.start ? a : b)).end : Infinity);
+    const rolesFrom = Math.min(firstEnd(this.metadata?.night_phases), firstEnd(this.metadata?.card_phases));
+    const shouldShow = rolesFrom === Infinity || (t >= rolesFrom && !this.isNight);
     masks.forEach((el) => el.classList.toggle("hidden", !shouldShow));
   }
 
@@ -1053,6 +1054,16 @@ export class WerewolfPlayer {
         this._bindHandleDrag(startHandle, phase, "start", dur, i);
         this._bindHandleDrag(endHandle, phase, "end", dur, i);
       });
+
+      // Card viewing (看牌): detected only, not editable
+      (this.metadata.card_phases || []).forEach((phase) => {
+        const marker = document.createElement("div");
+        marker.className = "card-marker";
+        marker.style.left = `${(phase.start / dur) * 100}%`;
+        marker.style.width = `${((phase.end - phase.start) / dur) * 100}%`;
+        marker.dataset.tooltip = `看牌 ${this._fmt(phase.start)} – ${this._fmt(phase.end)}`;
+        this.nightMarkersEl.appendChild(marker);
+      });
     };
 
     if (this.video.duration) {
@@ -1064,13 +1075,47 @@ export class WerewolfPlayer {
 
   _renderNightJumpButtons() {
     this.nightJumpButtons.innerHTML = "";
-    if (!this.metadata?.night_phases?.length) return;
+    const nights = this.metadata?.night_phases || [];
+    const cards = this.metadata?.card_phases || [];
+    if (!nights.length && !cards.length) return;
 
-    const sorted = this.metadata.night_phases
+    const sorted = nights
       .map((p, i) => ({ ...p, idx: i }))
       .sort((a, b) => a.start - b.start);
 
+    // 看牌 rows sit before the night that follows them (re-deals included)
+    const cardRow = (phase) => {
+      const group = document.createElement("div");
+      group.className = "card-jump-group";
+      const label = document.createElement("span");
+      label.className = "card-jump-label";
+      label.title = "看牌 · card viewing";
+      const startBtn = document.createElement("button");
+      startBtn.className = "card-jump-btn";
+      startBtn.textContent = this._fmt(phase.start);
+      startBtn.title = "看牌 (card viewing) start";
+      startBtn.addEventListener("click", () => {
+        this.video.currentTime = phase.start;
+      });
+      const endBtn = document.createElement("button");
+      endBtn.className = "card-jump-btn jump-end";
+      endBtn.textContent = this._fmt(phase.end);
+      endBtn.title = "看牌 end: the first night falls";
+      endBtn.addEventListener("click", () => {
+        this.video.currentTime = phase.end;
+      });
+      group.append(label, startBtn, endBtn);
+      return group;
+    };
+    const pending = [...cards].sort((a, b) => a.start - b.start);
+    const flushCards = (before) => {
+      while (pending.length && pending[0].start < before) {
+        this.nightJumpButtons.appendChild(cardRow(pending.shift()));
+      }
+    };
+
     sorted.forEach((phase, i) => {
+      flushCards(phase.start + 1);
       const group = document.createElement("div");
       group.className = "night-jump-group";
 
@@ -1099,6 +1144,7 @@ export class WerewolfPlayer {
       group.appendChild(endBtn);
       this.nightJumpButtons.appendChild(group);
     });
+    flushCards(Infinity);
   }
 
   _bindHandleDrag(handle, phase, edge, duration, index) {

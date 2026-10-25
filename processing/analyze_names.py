@@ -593,7 +593,11 @@ def build_role_map(all_items, all_regions):
 # ("验9查杀", "觉得1不是狼"…) — those give the role away as much as the name.
 # Fixed (not measured): the note column is a fixed-width UI element, and
 # measuring it tripped over centered banners (title, config line, ticker).
-NOTE_EXTEND = 0.12
+# 0.12 was too short: a full note line ("觉得3-5-8-9有身份", "11不是女巫就是
+# 混子") reaches ~0.131 past the ribbon in S22 and S23, so its last character
+# showed, and the user widened S22E47 G1's masks by hand to 0.172 on both
+# sides (2026-10-23). 0.17 matches that with ~0.04 to spare.
+NOTE_EXTEND = 0.17
 
 
 def build_masks(all_regions):
@@ -630,9 +634,11 @@ def _analyze(ocr, video_path):
     Scans 1100s-1400s first. If both sides aren't found, extends the scan
     to 1400s-2000s with a coarser interval to find late-appearing names.
     """
+    # No labels read: the standard layout (role column ~0.10-0.13 / 0.87-0.90
+    # of the width) plus the note column
     DEFAULT_MASKS = [
-        {"x": 0.05, "y": 0, "w": 0.10, "h": 1.0},
-        {"x": 0.85, "y": 0, "w": 0.10, "h": 1.0},
+        {"x": 0.05, "y": 0, "w": 0.25, "h": 1.0},
+        {"x": 0.70, "y": 0, "w": 0.25, "h": 1.0},
     ]
 
     # Hidden-roles broadcast? Decide from probes spread over the whole video,

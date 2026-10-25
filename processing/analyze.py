@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-from analyze_night import analyze_night_phases
+from analyze_night import analyze_phases
 
 
 def _print_log_tail(log_path, lines=15):
@@ -22,11 +22,27 @@ def _print_log_tail(log_path, lines=15):
         print(f"    {l}")
 
 
-def run_analysis(video_path, sequential=False, num_workers=0):
+def _keep_edits(old, new):
+    """Carry the user's corrections from an existing metadata.json into a
+    fresh analysis. Nights / masks the user edited (original_* differs from
+    the current value) stay as edited, and original_* becomes the new
+    detection, so Reset restores that."""
+    for key in ("night_phases", "name_masks"):
+        orig = old.get(f"original_{key}")
+        if orig is not None and orig != old.get(key):
+            new[f"original_{key}"] = new[key]
+            new[key] = old[key]
+            print(f"  Kept the user's edited {key} (the new detection is in original_{key})")
+    return new
+
+
+def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
     """Run full analysis pipeline and write metadata.json.
 
     sequential: if True, run night + name detection one after the other.
     num_workers: passed to night detection (0=auto, 1=sequential scan).
+    keep_edits: merge into the existing metadata.json, keeping the user's
+    edited nights and masks (see _keep_edits) instead of replacing them.
     """
     video_path = os.path.abspath(video_path)
     video_dir = os.path.dirname(video_path)
@@ -44,8 +60,8 @@ def run_analysis(video_path, sequential=False, num_workers=0):
 
     if sequential:
         # Original sequential execution
-        print("--- Night Phase Detection ---")
-        night_phases = analyze_night_phases(video_path, num_workers=num_workers)
+        print("--- Card Viewing + Night Phase Detection ---")
+        phases = analyze_phases(video_path, num_workers=num_workers)
         print()
 
         print("--- Character Name Detection ---")
@@ -75,9 +91,9 @@ def run_analysis(video_path, sequential=False, num_workers=0):
                 )
 
             # Run night detection in main process
-            print("--- Night Phase Detection ---")
+            print("--- Card Viewing + Night Phase Detection ---")
             try:
-                night_phases = analyze_night_phases(video_path, num_workers=num_workers)
+                phases = analyze_phases(video_path, num_workers=num_workers)
             except BaseException:
                 name_proc.kill()  # don't leave the OCR subprocess orphaned
                 raise
@@ -111,9 +127,12 @@ def run_analysis(video_path, sequential=False, num_workers=0):
         print()
 
     # Write metadata
+    night_phases = phases["night_phases"]
     metadata = {
         "video_file": video_file,
         "night_phases": night_phases,
+        # Card viewing (看牌) before the first night, and again after a re-deal
+        "card_phases": phases["card_phases"],
         "name_masks": name_result["name_masks"],
         "role_map": name_result.get("role_map", {}),
         # True for hidden-roles broadcasts (the show keeps roles as 未知 and
@@ -123,11 +142,15 @@ def run_analysis(video_path, sequential=False, num_workers=0):
     }
 
     metadata_path = os.path.join(video_dir, "metadata.json")
+    if keep_edits and os.path.exists(metadata_path):
+        with open(metadata_path, encoding="utf-8") as f:
+            metadata = _keep_edits(json.load(f), metadata)
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     print("=" * 60)
     print(f"Analysis complete!")
+    print(f"  Card viewings found: {len(phases['card_phases'])}")
     print(f"  Night phases found: {len(night_phases)}")
     print(f"  Name mask regions: {len(name_result['name_masks'])}")
     if name_result.get("hidden_roles"):
@@ -156,6 +179,10 @@ if __name__ == "__main__":
         "--workers", type=int, default=0,
         help="Number of parallel workers for night scan (0=auto, 1=sequential)",
     )
+    parser.add_argument(
+        "--keep-edits", action="store_true",
+        help="Keep the user's edited nights/masks from the existing metadata.json",
+    )
     args = parser.parse_args()
 
     if args.video_path:
@@ -172,4 +199,5 @@ if __name__ == "__main__":
         print("Run download.py first to download the video.")
         sys.exit(1)
 
-    run_analysis(video_path, sequential=args.sequential, num_workers=args.workers)
+    run_analysis(video_path, sequential=args.sequential, num_workers=args.workers,
+                 keep_edits=args.keep_edits)

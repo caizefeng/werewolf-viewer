@@ -28,7 +28,7 @@ ANALYZED = CACHE / "demo-analyzed"
 # (game id, duration s) as rendered by make_demo_video.py; g2 is hidden-roles
 G1, G2, G3 = "demoS01E01g1", "demoS01E01g2", "demoS01E02g1"
 DEMO_IDS = (G1, G2, G3)
-DURATION = {G1: 360, G2: 180, G3: 240}
+DURATION = {G1: 420, G2: 180, G3: 240}
 CHROMIUM_ARGS = ["--autoplay-policy=no-user-gesture-required", "--mute-audio"]
 
 
@@ -37,11 +37,16 @@ def log(msg):
 
 
 def prepare_demo_library(fresh=False):
-    """Rendered and analysed demo games in tests/.cache/demo-analyzed."""
-    if fresh and ANALYZED.exists():
+    """Rendered and analysed demo games in tests/.cache/demo-analyzed. The
+    games are rendered again (and so re-analysed) whenever the renderer is
+    newer than a rendered video."""
+    renderer = ROOT / "processing" / "demo" / "make_demo_video.py"
+    stale = not all((RENDERED / v / "video.mp4").exists()
+                    and (RENDERED / v / "video.mp4").stat().st_mtime >= renderer.stat().st_mtime for v in DEMO_IDS)
+    if (fresh or stale) and ANALYZED.exists():
         shutil.rmtree(ANALYZED)
     CACHE.mkdir(parents=True, exist_ok=True)
-    if not all((RENDERED / v / "video.mp4").exists() for v in DEMO_IDS):
+    if stale:
         log("rendering the demo games (ffmpeg, about a minute)")
         subprocess.run([str(PY), "processing/demo/make_demo_video.py", str(RENDERED)], cwd=ROOT, check=True)
     env = {**os.environ, "WEREWOLF_VIDEOS_DIR": str(ANALYZED), "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True"}

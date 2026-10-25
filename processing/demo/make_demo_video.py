@@ -6,7 +6,9 @@ role ribbons, the night tint and the phase banners are all drawn, with
 made-up players. The layout follows what the analysis expects (role
 ribbons at x~0.10 / x~0.89, rows pitched 0.16 from y=0.125, number badges
 outward of the ribbons, sidebar hidden at night, "天黑请闭眼" / "天亮请睁眼"
-banners), so the real pipeline can analyse these clips end to end.
+banners), so the real pipeline can analyse these clips end to end. Game 1
+also opens like a real broadcast: a still studio shot, then the card-viewing
+tour (看牌) of the twelve seats, cut straight to the first night.
 
 Usage: make_demo_video.py OUT_DIR            # writes OUT_DIR/<id>/video.mp4 + info.json
 Needs ffmpeg on PATH and a CJK font (macOS: STHeiti).
@@ -31,9 +33,10 @@ ROW_Y = [0.125 + 0.16 * i for i in range(6)]
 NAMES = ["Ash", "Bea", "Cal", "Dee", "Eli", "Fay", "Gus", "Hal", "Ivy", "Jun", "Kai", "Lou"]
 
 GAMES = [
-    {"id": "demoS01E01g1", "title": "Demo Cup S01E01 第一局 预女猎守 260101 werewolf", "dur": 360,
+    {"id": "demoS01E01g1", "title": "Demo Cup S01E01 第一局 预女猎守 260101 werewolf", "dur": 420,
      "roles": ["狼人", "预言家", "平民", "守卫", "猎人", "狼人", "平民", "狼人", "女巫", "平民", "平民", "狼人"],
-     "nights": [(30, 100), (220, 270)], "closeups": [(55, 75)],
+     "studio": (0, 50), "tour": (50, 90),
+     "nights": [(90, 160), (280, 330)], "closeups": [(115, 135)],
      "notes": {1: "跳预言家", 3: "站边1", 5: "守1", 8: "认平民", 10: "我是好人"}},
     {"id": "demoS01E01g2", "title": "Demo Cup S01E01 第二局 隐藏身份 260101 werewolf", "dur": 180,
      "roles": ["未知"] * 12, "revealed": {2: "狼人", 9: "预言家"},
@@ -127,6 +130,60 @@ def closeup_frame():
     return np.asarray(img)
 
 
+def studio_frame():
+    """Pre-game: the commentators' desk, one still shot."""
+    img = Image.new("RGB", (W, H), (40, 46, 70))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, int(H * 0.70), W, H], fill=(28, 30, 46))
+    d.rounded_rectangle([W * 0.18, H * 0.12, W * 0.82, H * 0.58], radius=24, fill=(66, 84, 128), outline=(150, 170, 220), width=6)
+    d.text((W * 0.5, H * 0.35), "DEMO CUP 演播室", fill=(235, 238, 248), font=font(96), anchor="mm")
+    for cx in (W * 0.36, W * 0.64):                                     # two commentators
+        d.ellipse([cx - 80, H * 0.52, cx + 80, H * 0.70], fill=(222, 196, 170))
+        d.rounded_rectangle([cx - 150, H * 0.68, cx + 150, H * 0.98], radius=40, fill=(56, 60, 90))
+    d.rounded_rectangle([W * 0.08, H * 0.80, W * 0.92, H * 0.86], radius=10, fill=(90, 70, 40))
+    return np.asarray(img)
+
+
+SEAT_COLORS = [(150, 90, 80), (80, 120, 150), (110, 140, 90), (150, 120, 70), (120, 90, 150), (90, 140, 140),
+               (160, 100, 120), (100, 110, 160), (140, 140, 90), (90, 120, 110), (150, 110, 100), (110, 100, 140)]
+
+
+def seat_closeup(seat):
+    """Card viewing: one player's close-up, holding a face-down role card,
+    with the seat's name plate on the table."""
+    img = Image.new("RGB", (W, H), tuple(int(c * 0.55) for c in SEAT_COLORS[seat - 1]))
+    d = ImageDraw.Draw(img)
+    for k in range(6):                                                  # wall panels
+        x0 = W * (0.02 + 0.165 * k)
+        d.rectangle([x0, H * 0.06, x0 + W * 0.14, H * 0.52], fill=tuple(int(c * 0.75) for c in SEAT_COLORS[(seat + k) % 12]))
+    d.ellipse([W * 0.38, H * 0.16, W * 0.62, H * 0.58], fill=(226, 200, 176), outline=(60, 50, 40), width=6)
+    d.text((W * 0.5, H * 0.37), NAMES[seat - 1][:2].upper(), fill=(70, 50, 40), font=font(120), anchor="mm")
+    d.rounded_rectangle([W * 0.30, H * 0.52, W * 0.70, H * 0.92], radius=60, fill=SEAT_COLORS[seat - 1])
+    d.rectangle([0, int(H * 0.78), W, H], fill=(92, 72, 58))            # table edge
+    d.rounded_rectangle([W * 0.55, H * 0.58, W * 0.66, H * 0.80], radius=12, fill=(40, 40, 60), outline=(230, 220, 190), width=5)
+    d.rounded_rectangle([W * 0.40, H * 0.84, W * 0.60, H * 0.95], radius=14, fill=(246, 240, 228), outline=(80, 60, 40), width=3)
+    d.text((W * 0.5, H * 0.895), f"{seat}  {NAMES[seat - 1]}", fill=(60, 44, 30), font=font(48), anchor="mm")
+    return np.asarray(img)
+
+
+TOUR_HOLD = 1.6  # seconds held on each seat before panning to the next
+
+
+def tour_frame(closeups, t, t0, t1):
+    """The director tours the seats 1 -> 12: hold each close-up, then pan
+    sideways to the next (eased), as the broadcasts do while players look at
+    their cards."""
+    per = (t1 - t0) / 12
+    k = min(11, int((t - t0) // per))
+    u = (t - t0) - k * per
+    if k == 11 or u < TOUR_HOLD:
+        return closeups[k]
+    p = (u - TOUR_HOLD) / (per - TOUR_HOLD)
+    p = p * p * (3 - 2 * p)
+    x = int(round(p * W))
+    return np.concatenate([closeups[k][:, x:], closeups[k + 1][:, :x]], axis=1)
+
+
 def tint_night(frame, k=1.0):
     """Red studio light; k in [0, 1] fades it in (real lights take seconds,
     and the detector treats a one-frame switch as a camera cut)."""
@@ -158,6 +215,10 @@ def render(game, out_dir):
     stage_only = np.asarray(night_img)
     night_base = tint_night(stage_only)
     closeup = closeup_frame()
+    studio = game.get("studio")
+    tour = game.get("tour")
+    studio_img = studio_frame() if studio else None
+    seat_imgs = [seat_closeup(n) for n in range(1, 13)] if tour else None
 
     def blend(day_frame, k):
         """k=0 full day (sidebar on, white light) .. k=1 full night (sidebar gone, red light)."""
@@ -176,7 +237,15 @@ def render(game, out_dir):
         night = next(((s, e) for s, e in nights if s <= t < e), None)
         day_no = 1 + sum(1 for s, e in nights if t >= e)
         fading = next(((s, e) for s, e in nights if s <= t < s + FADE or e <= t < e + FADE), None)
-        if fading and not any(s <= t < e for s, e in closeups):
+        if studio and studio[0] <= t < studio[1]:
+            img = Image.fromarray(studio_img)
+        elif tour and tour[0] <= t < tour[1]:
+            img = Image.fromarray(tour_frame(seat_imgs, t, *tour))
+        elif fading and fading[0] == nights[0][0] and t < fading[0] + FADE and tour:
+            # the tour cuts straight to the table as the first night falls
+            img = Image.fromarray(tint_night(stage_only, (t - fading[0]) / FADE))
+            banner_night(img)
+        elif fading and not any(s <= t < e for s, e in closeups):
             s, e = fading
             k = (t - s) / FADE if t < s + FADE else 1 - (t - e) / FADE
             img = Image.fromarray(blend(days[min(day_no if t >= e else day_no, 3) - 1], k))

@@ -31,12 +31,35 @@ CUT_THRESH = 40    # frame diff above this = camera cut (not a lighting change)
 MIN_PHASE_DURATION = 35  # minimum raw phase duration in seconds (filters false positives)
 
 SCAN_INTERVAL = 2  # seconds between sampled frames
+# Each sample also reads the frame MOTION_DT later and records how much a
+# 32x18 grey thumbnail changed (0-255): camera motion or a cut within a
+# quarter second. The card-viewing tour (analyze_cards) is the one stretch
+# before the first night where the picture keeps moving like that.
+MOTION_DT = 0.25
 
 
 def _compute_rg_ratio(roi):
     """Compute R/G color ratio for a region of interest."""
     mean = roi.mean(axis=(0, 1))
     return mean[2] / (mean[1] + 1)
+
+
+def _thumb(frame):
+    """32x18 grey thumbnail (float32) for cheap motion / cut measures."""
+    small = cv2.resize(frame, (32, 18), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+
+def _read_motion(cap, pos, sec, fps, frame):
+    """Read the frame MOTION_DT after `frame` (at frame index pos-1) and
+    return (motion, new pos); motion is 0.0 at the end of the video."""
+    target = int(round((sec + MOTION_DT) * fps))
+    while pos < target and cap.grab():
+        pos += 1
+    ret, later = cap.read()
+    if not ret:
+        return 0.0, pos
+    return float(np.abs(_thumb(later) - _thumb(frame)).mean()), pos + 1
 
 
 def _frame_redness(frame):
@@ -87,6 +110,7 @@ def _scan_segment(args):
     timestamps = []
     ratios = []
     diffs = []
+    motions = []
 
     for sec in range(start_sec, end_sec, scan_interval):
         # Advance to the exact frame for this timestamp
@@ -105,16 +129,19 @@ def _scan_segment(args):
         else:
             diffs.append(0.0)
         prev_frame = frame
+        motion, pos = _read_motion(cap, pos, sec, fps, frame)
+        motions.append(motion)
 
     cap.release()
-    return timestamps, ratios, diffs
+    return timestamps, ratios, diffs, motions
 
 
 def scan_corner_redness(video_path, num_workers=0):
     """Scan at SCAN_INTERVAL: compute max R/G ratio and frame-to-frame diff.
 
-    Returns (timestamps, ratios, diffs) — parallel arrays of sampled points.
-    diffs[i] = mean absolute pixel difference between frame i and frame i-1.
+    Returns (timestamps, ratios, diffs, motions) — parallel arrays of sampled
+    points. diffs[i] = mean absolute pixel difference between frame i and
+    frame i-1; motions[i] = thumbnail change over the MOTION_DT after frame i.
 
     num_workers: 0=auto (3 threads), 1=sequential, N=use N threads.
     Threading is used because cv2 releases the GIL during video decode.
@@ -151,14 +178,17 @@ def scan_corner_redness(video_path, num_workers=0):
     all_timestamps = []
     all_ratios = []
     all_diffs = []
-    for ts, rs, ds in results:
+    all_motions = []
+    for ts, rs, ds, ms in results:
         all_timestamps.extend(ts)
         all_ratios.extend(rs)
         all_diffs.extend(ds)
+        all_motions.extend(ms)
 
     print(f"  Sampled {len(all_timestamps)} frames ({duration}s video, "
           f"{SCAN_INTERVAL}s interval, {len(segments)} workers)")
-    return np.array(all_timestamps), np.array(all_ratios), np.array(all_diffs)
+    return (np.array(all_timestamps), np.array(all_ratios), np.array(all_diffs),
+            np.array(all_motions))
 
 
 def _scan_sequential(video_path, fps, duration):
@@ -167,6 +197,7 @@ def _scan_sequential(video_path, fps, duration):
     timestamps = []
     ratios = []
     diffs = []
+    motions = []
     prev_frame = None
     pos = 0  # frame index of the next read; frame-accurate for fractional fps
 
@@ -186,10 +217,12 @@ def _scan_sequential(video_path, fps, duration):
         else:
             diffs.append(0.0)
         prev_frame = frame
+        motion, pos = _read_motion(cap, pos, sec, fps, frame)
+        motions.append(motion)
 
     cap.release()
     print(f"  Sampled {len(timestamps)} frames ({duration}s video, {SCAN_INTERVAL}s interval)")
-    return np.array(timestamps), np.array(ratios), np.array(diffs)
+    return np.array(timestamps), np.array(ratios), np.array(diffs), np.array(motions)
 
 
 def find_red_clusters(timestamps, ratios, threshold=RED_THRESH, max_internal_gap=5):
@@ -377,7 +410,37 @@ def merge_by_day_evidence(phases, gap_is_night, timestamps, diffs,
     return sorted(out)
 
 
-def _make_gap_checker(video_path, clusters):
+class _Evidence:
+    """OCR and a capture, loaded on first use and shared by every
+    day-evidence check (cluster gaps, card-tour day checks, the dawn search
+    for a first night without red light)."""
+
+    def __init__(self, video_path):
+        self.video_path = video_path
+        self.ocr = None
+
+    def load(self):
+        if self.ocr is None:
+            from analyze_names import _init_ocr
+            self.ocr = _init_ocr()
+            self.cap = cv2.VideoCapture(self.video_path)
+            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        return self.ocr, self.cap, self.fps
+
+    def sidebar_at(self, t):
+        """Is the player sidebar on screen at time t?"""
+        from analyze_names import sidebar_visible
+        ocr, cap, fps = self.load()
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(max(0.0, t) * fps)))
+        ok, frame = cap.read()
+        return bool(ok and sidebar_visible(ocr, frame))
+
+    def close(self):
+        if self.ocr is not None:
+            self.cap.release()
+
+
+def _make_gap_checker(video_path, clusters, evidence):
     """Lazy day-evidence checker shared by merge_clusters and
     merge_by_day_evidence, or None when no gap between clusters is short
     enough to qualify (then no OCR is loaded).
@@ -397,15 +460,12 @@ def _make_gap_checker(video_path, clusters):
     cache = {}
 
     def _load():
-        if "ocr" not in state:
-            from analyze_names import _init_ocr, day_evidence_in, banner_seen
+        if "sidebar" not in state:
+            from analyze_names import day_evidence_in, banner_seen
             print("  Checking cluster gaps for day evidence (phase banners + sidebar OCR)...")
-            state["ocr"] = _init_ocr()
             state["sidebar"] = day_evidence_in
             state["banner"] = banner_seen
-            state["cap"] = cv2.VideoCapture(video_path)
-            state["fps"] = state["cap"].get(cv2.CAP_PROP_FPS)
-        return state["ocr"], state["cap"], state["fps"]
+        return evidence.load()
 
     def gap_is_night(t0, t1, check_sidebar=True):
         if t1 <= t0:
@@ -519,67 +579,183 @@ def refine_boundaries(video_path, phases, threshold=RED_THRESH):
     return refined
 
 
-def analyze_night_phases(video_path, num_workers=0):
-    """Detect night phases via bottom-corner ambient light color.
+# ── Card viewing (看牌) and the first night ──
+# The first night falls as the card-viewing tour ends: the director cuts from
+# the last close-up to the table, and the red light comes on 0-7 s later
+# (S21) or at once (S23). A night starting inside the tour (its close-ups of
+# the red tablecloth read as night light; S22 first nights began 10-40 s
+# early) is clipped to the tour's end; one starting after it keeps its
+# red-light start. When no night follows within CARD_NIGHT_LINK at all
+# (S22E48 G2: the studio never switched the red light on for night 1;
+# hidden-roles broadcasts spend the night on the commentators), the night
+# runs from the tour's end to the first sighting of the player sidebar,
+# which only shows in daytime: searched every DAWN_SEARCH_STEP from
+# DAWN_SEARCH_FROM after the tour (first nights last 2.7-6 min) up to
+# DAWN_SEARCH_TO, then narrowed to ~2 s. It overshoots dawn by the time the
+# sidebar takes to appear (~0.5 min), never undershoots.
+CARD_NIGHT_LINK = 90
+DAWN_SEARCH_FROM = 150
+DAWN_SEARCH_TO = 600
+DAWN_SEARCH_STEP = 20
 
+
+def _mute_cards(timestamps, ratios, cards):
+    """Ratios with the red light ignored before the first tour ends and
+    inside every tour: no night precedes the card viewing, and the red
+    tablecloth behind some seats reads as night light in the tour's
+    close-ups."""
+    ratios = ratios.copy()
+    ratios[timestamps < cards[0][1]] = 0.0
+    for cs, ce in cards[1:]:
+        ratios[(timestamps >= cs) & (timestamps < ce)] = 0.0
+    return ratios
+
+
+def _cut_out_cards(phases, cards):
+    """Remove the card tours from merged phases (a merge may bridge one)."""
+    for cs, ce in cards:
+        out = []
+        for s, e in phases:
+            if e <= cs or s >= ce:
+                out.append((s, e))
+                continue
+            if s < cs:
+                out.append((s, cs))
+            if e > ce:
+                out.append((ce, e))
+        phases = out
+    return phases
+
+
+def first_sidebar_after(evidence, t0, t1, step=DAWN_SEARCH_STEP):
+    """First time in [t0, t1] the sidebar shows (to ~2 s), or None."""
+    t = t0
+    while t <= t1:
+        if evidence.sidebar_at(t):
+            lo, hi = max(t0, t - step), t
+            while hi - lo > 2:
+                mid = (lo + hi) / 2
+                if evidence.sidebar_at(mid):
+                    hi = mid
+                else:
+                    lo = mid
+            return hi
+        t += step
+    return None
+
+
+def _link_first_nights(results, cards, evidence, duration):
+    """Keep the night after each card tour out of the tour, inserting it
+    when no night was detected (see CARD_NIGHT_LINK)."""
+    for k, (cs, ce) in enumerate(cards):
+        nxt = cards[k + 1][0] if k + 1 < len(cards) else float("inf")
+        after = sorted((p for p in results if p["end"] > ce and p["start"] < nxt),
+                       key=lambda p: p["start"])
+        first = after[0] if after else None
+        if first is not None and first["start"] <= ce + CARD_NIGHT_LINK:
+            first["start"] = round(max(first["start"], ce), 2)
+            continue
+        limit = min(ce + DAWN_SEARCH_TO, nxt, duration - 1)
+        print(f"  No night follows the card viewing at {_fmt(ce)}: "
+              f"looking for the first day's sidebar...")
+        dawn = first_sidebar_after(evidence, ce + DAWN_SEARCH_FROM, limit)
+        if dawn is None:
+            print("    sidebar not found; first night left undetected")
+        elif first is not None and first["start"] < dawn:
+            first["start"] = round(ce, 2)  # its red bursts came late in the night
+        else:
+            print(f"    first night {_fmt(ce)} - {_fmt(dawn)} (no red light)")
+            results.append({"start": round(ce, 2), "end": round(dawn, 2)})
+    return sorted(results, key=lambda p: p["start"])
+
+
+def _fmt(t):
+    m, sec = divmod(int(t), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def analyze_phases(video_path, num_workers=0):
+    """Detect the card-viewing tours and the night phases.
+
+    Returns {"night_phases": [{start, end}], "card_phases": [{start, end}]}.
     num_workers: 0=auto, 1=sequential, N=use N workers for frame scanning.
     """
     print("Scanning bottom corners for ambient light changes...")
-    timestamps, ratios, diffs = scan_corner_redness(video_path, num_workers)
+    timestamps, ratios, diffs, motions = scan_corner_redness(video_path, num_workers)
 
     if len(timestamps) == 0:
         print("No frames scanned.")
-        return []
+        return {"night_phases": [], "card_phases": []}
+
+    from analyze_cards import find_card_phases  # imports this module's scan helpers
 
     duration = int(timestamps[-1]) + SCAN_INTERVAL
+    evidence = _Evidence(video_path)
+    try:
+        print("Looking for the card viewing (看牌)...")
+        cards = find_card_phases(
+            video_path, timestamps, motions, ratios,
+            day_seen=lambda t: evidence.sidebar_at(t - 3) or evidence.sidebar_at(t - 33))
+        if cards:
+            ratios = _mute_cards(timestamps, ratios, cards)
+        else:
+            print("  No card-viewing tour found")
 
-    clusters = find_red_clusters(timestamps, ratios)
-    print(f"  Found {len(clusters)} red cluster(s)")
+        clusters = find_red_clusters(timestamps, ratios)
+        print(f"  Found {len(clusters)} red cluster(s)")
 
-    gap_is_night = _make_gap_checker(video_path, clusters)
-    phases = merge_clusters(clusters, timestamps, ratios, diffs, gap_is_night=gap_is_night)
-    if gap_is_night is not None:
-        gaps = [cs - pe for (_, pe), (cs, _) in zip(phases, phases[1:])]
-        max_gap = MAX_EVIDENCE_GAP_NO_BANNERS
-        if any(MAX_EVIDENCE_GAP_NO_BANNERS < g <= MAX_EVIDENCE_GAP for g in gaps) and gap_is_night.has_banners():
-            max_gap = MAX_EVIDENCE_GAP
-        phases = merge_by_day_evidence(phases, gap_is_night, timestamps, diffs, max_gap=max_gap)
+        gap_is_night = _make_gap_checker(video_path, clusters, evidence)
+        phases = merge_clusters(clusters, timestamps, ratios, diffs, gap_is_night=gap_is_night)
+        if gap_is_night is not None:
+            gaps = [cs - pe for (_, pe), (cs, _) in zip(phases, phases[1:])]
+            max_gap = MAX_EVIDENCE_GAP_NO_BANNERS
+            if any(MAX_EVIDENCE_GAP_NO_BANNERS < g <= MAX_EVIDENCE_GAP for g in gaps) and gap_is_night.has_banners():
+                max_gap = MAX_EVIDENCE_GAP
+            phases = merge_by_day_evidence(phases, gap_is_night, timestamps, diffs, max_gap=max_gap)
+        phases = _cut_out_cards(phases, cards)
 
-    # Filter phases bounded by camera cuts on both sides (not real transitions).
-    # A phase assembled from several red bursts is a real night whose outer
-    # bursts happen to begin/end on cuts, so it is exempt.
-    def _n_clusters(s, e):
-        return sum(1 for cs, ce in clusters if cs >= s and ce <= e)
-    multi = [(s, e) for s, e in phases if _n_clusters(s, e) >= 3]
-    single = [(s, e) for s, e in phases if _n_clusters(s, e) < 3]
-    phases = sorted(filter_cut_bounded_phases(single, timestamps, diffs) + multi)
+        # Filter phases bounded by camera cuts on both sides (not real transitions).
+        # A phase assembled from several red bursts is a real night whose outer
+        # bursts happen to begin/end on cuts, so it is exempt.
+        def _n_clusters(s, e):
+            return sum(1 for cs, ce in clusters if cs >= s and ce <= e)
+        multi = [(s, e) for s, e in phases if _n_clusters(s, e) >= 3]
+        single = [(s, e) for s, e in phases if _n_clusters(s, e) < 3]
+        phases = sorted(filter_cut_bounded_phases(single, timestamps, diffs) + multi)
 
-    # Filter by minimum duration
-    phases = [(s, e) for s, e in phases if e - s >= MIN_PHASE_DURATION]
+        # Filter by minimum duration
+        phases = [(s, e) for s, e in phases if e - s >= MIN_PHASE_DURATION]
 
-    # Filter phases starting at the very beginning (intro red lighting, not real night)
-    phases = [(s, e) for s, e in phases if s > 0]
+        # Filter phases starting at the very beginning (intro red lighting, not real night)
+        phases = [(s, e) for s, e in phases if s > 0]
 
-    # Pin each boundary to the actual light transition, then add buffers
-    phases = refine_boundaries(video_path, phases)
-    results = []
-    for s, e in phases:
-        results.append({
-            "start": round(max(0, s - ENTRY_BUFFER), 2),
-            "end": round(min(duration - 1, e + EXIT_BUFFER), 2),
-        })
+        # Pin each boundary to the actual light transition, then add buffers
+        phases = refine_boundaries(video_path, phases)
+        results = []
+        for s, e in phases:
+            results.append({
+                "start": round(max(0, s - ENTRY_BUFFER), 2),
+                "end": round(min(duration - 1, e + EXIT_BUFFER), 2),
+            })
+        results = _link_first_nights(results, cards, evidence, duration)
+    finally:
+        evidence.close()
 
+    card_phases = [{"start": round(s, 2), "end": round(e, 2)} for s, e in cards]
+    print(f"Found {len(card_phases)} card viewing(s)")
+    for p in card_phases:
+        print(f"  {_fmt(p['start'])} - {_fmt(p['end'])} ({p['end'] - p['start']:.0f}s)")
     print(f"Found {len(results)} night phase(s)")
     for p in results:
-        s, e = p["start"], p["end"]
-        dur = e - s
-        def _fmt(t):
-            m, sec = divmod(int(t), 60)
-            h, m = divmod(m, 60)
-            return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
-        print(f"  {_fmt(s)} - {_fmt(e)} ({dur:.0f}s)")
+        print(f"  {_fmt(p['start'])} - {_fmt(p['end'])} ({p['end'] - p['start']:.0f}s)")
 
-    return results
+    return {"night_phases": results, "card_phases": card_phases}
+
+
+def analyze_night_phases(video_path, num_workers=0):
+    """Night phases only (see analyze_phases)."""
+    return analyze_phases(video_path, num_workers)["night_phases"]
 
 
 if __name__ == "__main__":
@@ -589,5 +765,5 @@ if __name__ == "__main__":
                         help="Number of parallel workers (0=auto, 1=sequential)")
     args = parser.parse_args()
 
-    phases = analyze_night_phases(args.video_path, num_workers=args.workers)
+    phases = analyze_phases(args.video_path, num_workers=args.workers)
     print(json.dumps(phases, indent=2, ensure_ascii=False))

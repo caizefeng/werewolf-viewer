@@ -11,15 +11,20 @@ Web-based werewolf (狼人杀) tournament video viewer that auto-detects night p
 ```
 werewolf_viewer/
 ├── CLAUDE.md              # This file — keep up to date with changes
-├── scripts/               # Deployment scripts
-│   ├── start.sh           # Start server in background (persists after terminal close)
-│   └── stop.sh            # Stop background server
-├── .run/                  # Runtime files: server.pid, server.log (gitignored)
+├── scripts/               # Server instances (see "Server instances" below)
+│   ├── start.sh           # start.sh [prod|dev]: start an instance in the background
+│   ├── stop.sh            # stop.sh [prod|dev]
+│   ├── deploy.sh          # deploy.sh [REF] [--force]: move prod's worktree to a commit
+│   └── dev-library.sh     # dev-library.sh ID... | --all: hard-link games into videos-dev/
+├── .run/                  # Runtime files: <instance>.pid, <instance>.log (gitignored)
+├── .prod/                 # Production git worktree, detached at the deployed commit (gitignored)
+├── videos-dev/            # Dev instance library: hard-linked video.mp4 + copied metadata (gitignored)
 ├── processing/            # Python video analysis scripts
 │   ├── venv/              # Python virtual environment (pyenv + venv)
 │   ├── requirements.txt   # Dependencies: yt-dlp, paddleocr, paddlepaddle, opencv-python
 │   ├── analyze.py         # Main pipeline: runs night + name analysis (parallel by default)
 │   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs (threaded)
+│   ├── analyze_cards.py   # Card-viewing (看牌) tour detection from camera motion
 │   ├── analyze_names.py   # Role name detection via PaddleOCR (lazy frame sampling)
 │   ├── models/            # Local PaddleOCR model weights (gitignored, ~165MB)
 │   │   ├── PP-OCRv5_server_det/  # Text detection model
@@ -104,6 +109,9 @@ python3 processing/download.py --video-id="VIDEO_ID"
 # Analyze a video (generates metadata.json, parallel by default)
 python3 processing/analyze.py --video-id="VIDEO_ID"
 
+# Re-analyze but keep the user's edited nights / masks (original_* takes the new detection)
+python3 processing/analyze.py --video-id="VIDEO_ID" --keep-edits
+
 # Analyze with full sequential mode (for debugging / comparison)
 python3 processing/analyze.py --video-id="VIDEO_ID" --sequential --workers 1
 
@@ -118,17 +126,36 @@ cd processing/benchmarks && python3 benchmark.py
 cd processing/benchmarks && python3 benchmark_full.py                    # all GT videos
 cd processing/benchmarks && python3 benchmark_full.py VIDEO_ID1 VIDEO_ID2  # specific videos
 
-# Start server in background (persists after terminal close)
-scripts/start.sh          # serves on http://localhost:5173/
+# Start / stop a server instance in the background (persists after terminal close)
+scripts/start.sh          # prod: http://localhost:5173/, .prod worktree, videos/
+scripts/start.sh dev      # dev:  http://localhost:5174/, this tree, videos-dev/
+scripts/stop.sh [dev]
 
-# Stop background server
-scripts/stop.sh
+# Deploy committed code to production (refuses while a prod job runs)
+scripts/deploy.sh         # HEAD; or scripts/deploy.sh <commit>
 
 # Start web dev server interactively (must load fnm + corepack first)
 eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 # For video IDs starting with dash, use: --video-id="-XXXX"
 ```
+
+## Server instances (prod / dev, since 2026-10-25)
+The user watches games on the server while development goes on, so there are two:
+- **prod** (`scripts/start.sh`, port 5173): runs from `.prod/`, a git worktree detached at the
+  deployed commit, and serves the real library `videos/`. Its `processing/venv` and
+  `processing/models` are symlinks to the main tree's (gitignored); `web/node_modules` is its own
+  (`pnpm install` by deploy.sh when the lockfile changes). `scripts/deploy.sh [REF]` checks the
+  worktree out at REF; the running Vite server picks it up itself (page reloads; a vite.config.js
+  change restarts it and drops in-memory jobs, hence the refusal while `/api/job-status` shows an
+  active job; `--force` overrides). Never edit files under `.prod/`.
+- **dev** (`scripts/start.sh dev`, port 5174): runs from this working tree (hot reload) with
+  `WEREWOLF_VIDEOS_DIR=videos-dev`. `scripts/dev-library.sh ID...|--all` hard-links video.mp4 and
+  copies info.json/metadata.json, so dev analyses, edits and deletes never touch production.
+  `VITE_INSTANCE=dev` makes the page say "dev" (header badge, amber top rule, tab title).
+- Both bind 0.0.0.0. The e2e tests start their own throwaway servers on free ports.
+- New analysis code reaches production videos only by re-running it over `videos/` (↻ in prod
+  after a deploy, or a CLI script); videos with `original_*` fields carry the user's corrections.
 
 ## Algorithm Notes
 
@@ -163,7 +190,27 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Computes frame-to-frame pixel diff (`cv2.absdiff`, mean) to distinguish:
   - Real day/night transitions: small diff (~20-30), same scene with lighting change
   - Camera cuts (close-up ↔ table): large diff (~60-80), different scene
-- Pipeline: find_red_clusters → merge_clusters → **merge_by_day_evidence** → filter_cut_bounded_phases → filter by min duration (35s) → **refine_boundaries** → add buffers. Both merge passes share one lazy, cached day-evidence checker (`_make_gap_checker` → `gap_is_night(t0, t1, check_sidebar)`), so OCR loads only when a gap needs it
+- Pipeline (`analyze_phases`, which returns `{night_phases, card_phases}`; `analyze_night_phases`
+  is the nights-only wrapper the benchmarks use): scan → **find_card_phases** (看牌, see below) →
+  **_mute_cards** (red samples before the first tour's end and inside every tour are ignored: no
+  night precedes the card viewing, and the tour's close-ups of the red tablecloth read as night
+  light) → find_red_clusters → merge_clusters → **merge_by_day_evidence** → **_cut_out_cards** (a
+  merge never bridges a tour) → filter_cut_bounded_phases → filter by min duration (35s) →
+  **refine_boundaries** → add buffers → **_link_first_nights**. All OCR (gap checks, banner checks,
+  the card search's day checks, the dawn search) shares one lazily loaded `_Evidence` (OCR + capture),
+  so OCR loads only when something needs it
+- **_link_first_nights** (CARD_NIGHT_LINK=90): the night after each tour is clipped so it never
+  starts inside the tour (S22 first nights used to start 10-40 s early, inside it: E47G1 7:13 instead
+  of 7:43, E48G3, E49G2; E49G1's first "night" even started at 0:16); one starting after the tour
+  keeps its red-light start (S21 lights come on 0-7 s after the cut to the table, S23 at once). If no
+  night starts within 90 s of a tour's end, night 1 was missed -- S22E48 G2: the studio never switched
+  the red light on for night 1 (8:43-13:17), so masks stayed off until the second night ended at
+  56:49 (user report 2026-10-25); hidden-roles broadcasts spend the night on the commentators. Night 1
+  is then inserted from the tour's end to the first sidebar sighting (`first_sidebar_after`: OCR every
+  DAWN_SEARCH_STEP=20 s from DAWN_SEARCH_FROM=150 s after the tour up to DAWN_SEARCH_TO=600 s, then
+  bisected to ~2 s). It overshoots dawn by the ~0.5 min the sidebar takes to appear, never undershoots
+- The scan also records `motions`: each 2 s sample reads the frame MOTION_DT (0.25 s) later and
+  stores the mean change of 32x18 grey thumbnails (camera motion or a cut), for the card search
 - **refine_boundaries**: a raw boundary from the 2s grid is only known to within one interval, which
   made the overlay lead vary between ~1s and ~4s. Each boundary window — (start−2s, start] for red-on,
   [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding
@@ -204,6 +251,53 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_CUT_MERGE_GAP=180`, `MAX_EVIDENCE_GAP=240`, `MAX_EVIDENCE_GAP_NO_BANNERS=120`, `MIN_EVIDENCE_FRAGMENT=6`, `BANNER_MIN_GAP=20`, `DAWN_BANNER_WINDOW=24`, `NIGHT_BANNER_LEAD=12`, `NIGHT_BANNER_LAG=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
 - Performance: the corner scan itself is ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead). The lazy OCR evidence checks (banners every 3s in short windows, sidebar every 10s inside candidate gaps) add roughly 1-4 minutes on videos whose bursts have 20-240s gaps; a full run measured 2-6 min per 40-150 min video on this 10-core CPU under concurrent load (gt_check 2026-10-15)
 
+### Card Viewing (看牌) Detection (analyze_cards.py, since 2026-10-25)
+- What it is: after the pre-game (commentators, player introductions) the director tours the twelve
+  seats in order (1 -> 12 or 12 -> 1) while each player checks their role card, then cuts to the
+  table wide shot as night 1 falls. Same in S21, S22 and S23, open and hidden-roles broadcasts alike;
+  35-55 s; nothing on screen labels it. A broadcast can deal twice before day 1 (re-deal):
+  EC-1bimFjo4 (S21E05 G2, 6:48 and 15:06), pZ0vo8VRDkA (S23E24 G3, 7:28 and 13:47), QNxo5hmWLN0
+  (S23E24 G2, 6:27 and 16:39 -- the first attempt was abandoned at dawn, commentators in between)
+- **Signal: camera motion.** The commentators, the introductions and the night table shot hold still;
+  the tour is seat close-ups joined by fast pans. Corner redness can't separate it from the night
+  (the tablecloth behind seats 10-12 is red). The S23 night graphic, birthday celebrations, day-time
+  camera drifts etc. move too, but slowly (pans 1-25% vs 24-63% for tours)
+- **Coarse** (`coarse_cores`, from the night scan's `motions`): runs of 2 s samples with motion >=
+  CARD_COARSE (12), gaps <= CARD_BRIDGE (12 s, a held close-up), >= CARD_MIN_CORE (16 s), starting
+  before CARD_SEARCH_END (45 min)
+- **Fine** (`fine_scan` around each core +-60 s, widened once if the run reaches the window edge):
+  samples every 0.5 s, each with a pair 0.25 s later (32x18 grey thumbs): `motion` (change over
+  0.25 s), `change` (over 0.5 s; > CARD_CUT 25 = a cut or a pan step), corner redness, thumbs.
+  `shots_from` splits at every change; `grow_tour` grows the core over short shots until a shot >=
+  CARD_LONG_SHOT (15 s) on each side, reports cut midpoints (shot start - 0.25 s). A shot only counts
+  as inside the core if it overlaps it by > 1 s (the core's first coarse sample often straddles the
+  cut from the commentators, which once grew a tour back over 3 minutes of them)
+- **Night table shot trimming** (`_night_shot`): hidden-roles broadcasts show the night's table for
+  only 5-10 s before the commentators, short enough to pass for one more close-up. It is (1) the first
+  still shot after the core in which the red light comes on (first sample R/G < 1.8, later >= 2.5;
+  "still" allows a moving sample or two, since the light switching on is itself a big change), or (2)
+  when the long shot after the run looks like the long shot before it (same commentators' set, mean
+  thumbnail difference < SAME_SET 15) the last still red shot starting within 15 s of that return.
+  (1) is not searched inside the core: close-ups settling on the red tablecloth after a pan look the same
+- **Accept** (`is_tour`): length 25-80 s and pans >= 30% and moving >= 30%; a slower tour (S21 holds
+  each seat longer: F2J0QK_3gUo pans 24%) also passes at >= 15% / 20% when the red light comes on within
+  CARD_RED_WITHIN (30 s) of its end. No tour is in daytime: a candidate with the player sidebar up
+  3 s / 33 s before it (`day_seen`, 1-2 OCR checks) is rejected, which matters because the night
+  search ignores all red light before the first tour (a false tour on day 1 would erase night 1).
+  The first accepted tour is 看牌; later candidates are only a re-deal: within CARD_REDEAL_WITHIN
+  (15 min) and before the first day, where the search stops. At most CARD_MAX_SCANS (6) fine scans
+- **Ground truth** (28 games, every tour checked on frames: the shot before is the commentators, the
+  first/last tour shot a player close-up, the shot after the table; research features + simulation
+  in the session scratchpad): S21 -ESYZWvQMH4 7:35-8:18, 65R0r19JyYk 11:44-12:27, EC-1bimFjo4
+  6:48-7:26 + 15:06-15:44, F2J0QK_3gUo 9:35-10:22, ieLaR4NBPz4 10:28-11:10, Jnf_dLaVNMU 10:54-11:42,
+  WkVPdddUiio 5:24-6:05, Xk65eicHSyw 15:55-16:40 (starts ~2.5 s early: a failed green-screen key split
+  the commentators' shot), ZusP81Ycn-U 6:38-7:27; S22 d3jNiPSqMuI 7:06-7:42, iDD3JgXWA-0 8:29-9:09,
+  7SG4f3ZpZP0 8:48-9:26, Im5713oy3b4 8:00-8:36, 9Yij3uRUp1M 7:50-8:44, Dv0dRH80XGo 6:40-7:21,
+  zHCN-nyQ9jA 6:43-7:26, 02bLRRi6RZk 5:49-6:30, zla5T_T4UKQ 6:15-6:54; S23 xNDz6SStaLo 8:37-9:17,
+  QNxo5hmWLN0 6:27-7:03 + 16:39-17:20, pZ0vo8VRDkA 7:28-8:05 + 13:47-14:23, bzsBWNpIwpo 10:24-11:10,
+  fgw-4eUV0JE 5:45-6:21, HpIM5xTU-t8 6:17-6:56, X5J6PIMh368 6:28-7:07, 3oifxz_xLr4 6:37-7:15,
+  40RdPP2AuMs 7:14-7:52, CBZfebaxD0E 7:30-8:07. 31/31 found, 0 false tours (18 candidates rejected)
+
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR **PP-OCRv6 medium** det+rec (paddleocr 3.7.0) to find Chinese role names (狼人,
   预言家, 女巫, etc.). Chosen 2026-10 by benchmark on 72 verified vertical role labels + 18 未知
@@ -241,11 +335,14 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   _cluster_rows (a snapped label never outvotes an exactly read one). build_role_map drops any
   row whose inferred seat falls outside the side's six seats (1-6 left, 7-12 right)
 - Outer edge from **10th/90th percentile** role-box x-edges (a stray box can't widen it)
-- **Masks cover the role column PLUS the note column**: inner edge extends NOTE_EXTEND (0.12 of
+- **Masks cover the role column PLUS the note column**: inner edge extends NOTE_EXTEND (0.17 of
   frame width) past the role toward center, clamped (left <=0.32, right >=0.68) so it never reaches
   the stage. The director types a running opinion next to each role that gives it away as much as
   the name. Fixed extension, not measured (measuring tripped over centered banners: title, config
-  line, news ticker)
+  line, news ticker). It was 0.12 until 2026-10-25: a full note line ("觉得3-5-8-9有身份" in S22,
+  "11不是女巫就是混子" in S23) reaches ~0.131 past the ribbon, so its last character showed, and the
+  user had widened S22E47 G1's masks by hand to exactly 0.172 on both sides. DEFAULT_MASKS (no labels
+  read) cover 0.05-0.30 / 0.70-0.95 for the same reason
 - **Role map** (build_role_map): role_map = {left:[...], right:[...]}, each player
   {number, role, y0, y1} -- seat ID only, NO names (OCR of the stylized name tags was unreliable;
   the user wants seat numbers only). Rows cluster role boxes by y (_cluster_rows, which also keeps
@@ -399,6 +496,13 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   edge-anchored mask on whichever side has none; in Roles mode it adds a center mask
 - "+ Mask" button to manually add mask regions when auto-detection fails
 - Night phase markers on progress bar (red segments, draggable handles)
+- **Card viewing (看牌)** from metadata `card_phases`: teal segment(s) on the progress bar
+  (`.card-marker`, tooltip "看牌 m:ss – m:ss", not editable) and teal rows in the left jump panel
+  (`.card-jump-group`: a small card glyph + start/end buttons), placed before the night that follows
+  them; the panel's tab reads PHASES (it was NIGHTS) and shows even for a game with no nights (hidden
+  roles). The status line says "看牌 at m:ss". Masks now show from `min(first night end, first card
+  end)` (and never during a night): the card viewing ends as night 1 begins, so a missed first night
+  can no longer leave day 1 unmasked
 - **Edit persistence**: all edits (phase drags, add/remove phases, add/remove/resize
   masks, resets) POST to `/api/metadata` and are written into the video's
   metadata.json; auto-detected values are preserved in `original_night_phases` /
@@ -474,10 +578,12 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
   synthetic demo library** and its own Vite server on a free port (127.0.0.1, `WEREWOLF_DEMO=1`,
   `WEREWOLF_VIDEOS_DIR`), so tests click, edit, bookmark, re-analyse and delete freely and never touch
   videos/. The demo games are rendered and analysed by the real pipeline once and cached in
-  tests/.cache/ (gitignored; `--fresh` or deleting it re-analyses after pipeline changes)
+  tests/.cache/ (gitignored; `--fresh` or deleting it re-analyses after pipeline changes; a renderer
+  newer than the rendered games re-renders them)
 - `player`: regression walk of the core viewer (library grouping, masks and modes, per-seat frames,
-  role panel by role/seat with pack-wolf reveal, night overlay/auto-mute/jumps, mute, edit + reset
-  persistence, fullscreen mask fit, hidden-roles behaviour). `bookmarks`: the /api/state contract
+  role panel by role/seat with pack-wolf reveal, the 看牌 marker / panel row / jump / no masks or
+  overlay during it, night overlay/auto-mute/jumps, mute, edit + reset persistence, fullscreen mask
+  fit, hidden-roles behaviour; 49 checks). `bookmarks`: the /api/state contract
   (validation, 403/413, merge, 30 concurrent writers, corrupt file) and the UI (row/info-bar/B-key
   stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
   saves, switch and tab-close saves, watched games, another device, touch, survival of
@@ -491,7 +597,9 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - `processing/demo/make_demo_video.py [OUT_DIR]` renders three made-up 12-player games with ffmpeg
   (H.264): drawn stage, player cards with invented names, role ribbons at the layout the analysis
   expects, red-tinted nights with the sidebar hidden, a wolves'-discussion close-up inside a night,
-  and the 天黑请闭眼 / 天亮请睁眼 banners. One game is a hidden-roles broadcast (未知 ribbons). Output:
+  and the 天黑请闭眼 / 天亮请睁眼 banners. One game is a hidden-roles broadcast (未知 ribbons). Game 1
+  (420 s) opens like a real broadcast: a still studio shot (0-50 s), the card-viewing tour of the 12
+  seats (50-90 s, 1.6 s holds + eased pans) and a cut to night 1 (90-160 s); night 2 is 280-330 s. Output:
   `processing/demo/library/<id>/video.mp4 + info.json` and `catalogue.json` (gitignored)
 - Run the server with `WEREWOLF_DEMO=1` to make `/api/search` list the catalogue and downloads
   copy the rendered game in (`processing/demo/fake_download.py`, ~12s with progress); analysis
@@ -522,7 +630,8 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 - `POST /api/stop` - stop one job (body: {videoId}); a stop while queued/downloading deletes the partial dir, a stop during analysis keeps the download
 - `POST /api/delete` - delete video dir (body: {videoId}); 409 while a job runs for it
 - `POST /api/metadata` - persist edited night_phases/name_masks to metadata.json (body: {videoId, night_phases, name_masks}); preserves originals in original_* fields
-- metadata.json also carries `role_map` (per-player role/number/name/y-band) from analysis, read by the role-reveal panel
+- metadata.json also carries `role_map` (per-player role/number/name/y-band) from analysis, read by the role-reveal panel,
+  and `card_phases` ([{start, end}], the 看牌 tours; two after a re-deal), which /api/metadata leaves alone
 - `GET /<videoId>/*` - serve files from ../videos/
 
 ### Security (server is LAN-exposed: host 0.0.0.0, allowedHosts true)

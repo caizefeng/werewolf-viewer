@@ -1,14 +1,16 @@
 """Regression walk of the core player on the demo games: library grouping,
 masks and mask modes, per-seat frames, the role panel (pack wolves, seat and
-role modes), night overlay and auto-mute, night jumps, mute, edit
-persistence, fullscreen mask fit and the hidden-roles behaviour."""
+role modes), the card viewing (看牌) marker and jump, night overlay and
+auto-mute, night jumps, mute, edit persistence, fullscreen mask fit and the
+hidden-roles behaviour."""
 import json
 
 from harness import (G1, G2, G3, DEMO_IDS, active_id, ctl, current_time, open_app, open_panel, park_mouse,
                      show_controls, watch_errors, wrapper_box)
 
 PACK = {1, 6, 8, 12}          # the 狼人 seats of demo game 1 (all pack wolves)
-DAY_T, NIGHT_T = 150, 240     # demo game 1: nights about 0:30-1:42 and 3:40-4:32
+DAY_T, NIGHT_T = 210, 300     # demo game 1: 看牌 0:50-1:30, nights about 1:30-2:42 and 4:40-5:32
+CARD_T = 70                   # inside the card viewing
 
 
 def _revealed(page):
@@ -41,7 +43,14 @@ def run(base, run_dir, C, browser):
     C.check("the video decodes in the browser", vs["w"] == 1920 and not vs["err"], json.dumps(vs))
     C.check("the info bar shows the full title", "Demo Cup S01E01" in pg.evaluate("document.getElementById('video-title').textContent"))
     C.check("two night markers on the progress bar", pg.evaluate("document.querySelectorAll('.night-marker').length") == 2)
-    C.check("two entries in the NIGHTS panel", pg.evaluate("document.querySelectorAll('.night-jump-group').length") == 2)
+    C.check("two night entries in the PHASES panel", pg.evaluate("document.querySelectorAll('.night-jump-group').length") == 2)
+    C.check("the status names the card viewing", "看牌 at 0:49" in st, st)
+    card = pg.evaluate("(() => { const c = [...document.querySelectorAll('.card-marker')]; const n = document.querySelector('.night-marker');"
+                       " return {n: c.length, left: c.length && parseFloat(c[0].style.left), night: parseFloat(n.style.left),"
+                       " color: c.length && getComputedStyle(c[0]).backgroundColor, tip: c.length && c[0].dataset.tooltip}; })()")
+    C.check("one 看牌 marker on the progress bar, before the first night, not red",
+            card["n"] == 1 and card["left"] < card["night"] and card["tip"].startswith("看牌")
+            and not card["color"].startswith("rgba(224, 72, 72"), json.dumps(card, ensure_ascii=False))
 
     pg.evaluate(f"document.getElementById('video').currentTime = {DAY_T}")
     pg.wait_for_timeout(1500)
@@ -100,13 +109,25 @@ def run(base, run_dir, C, browser):
     park_mouse(pg)
 
     open_panel(pg, "left")
-    C.check("the NIGHTS panel opens on left-edge hover", pg.evaluate("document.getElementById('night-jump-buttons').matches(':hover')"))
+    C.check("the PHASES panel opens on left-edge hover", pg.evaluate("document.getElementById('night-jump-buttons').matches(':hover')"))
+    rows = pg.evaluate("[...document.querySelectorAll('#night-jump-buttons > div')].map(d => d.className)")
+    C.check("the PHASES panel lists 看牌 first, then the nights",
+            rows == ["card-jump-group", "night-jump-group", "night-jump-group"], str(rows))
+    pg.click(".card-jump-btn:not(.jump-end)")
+    pg.wait_for_timeout(800)
+    tc = current_time(pg)
+    C.check("the 看牌 button jumps to the card viewing", 45 < tc < 55, str(tc))
+    pg.evaluate(f"document.getElementById('video').currentTime = {CARD_T}")
+    pg.wait_for_timeout(1200)
+    C.check("no night overlay during 看牌", pg.evaluate("document.getElementById('night-overlay').classList.contains('hidden')"))
+    C.check("no masks during 看牌 (no roles on screen yet)",
+            pg.evaluate("[...document.querySelectorAll('.name-mask')].every(m => m.classList.contains('hidden'))"))
     pg.click(".night-jump-btn:not(.jump-end)")
     pg.wait_for_timeout(800)
     t1 = current_time(pg)
     pg.evaluate("document.getElementById('video').currentTime += 5")
     pg.wait_for_timeout(1200)
-    C.check("the first night button jumps to the first night", 20 < t1 < 40, str(t1))
+    C.check("the first night button jumps to the first night, where 看牌 ends", 85 < t1 < 95, str(t1))
     C.check("the night overlay covers a night", not pg.evaluate("document.getElementById('night-overlay').classList.contains('hidden')"))
     C.check("the phase chip reads Night", pg.evaluate("(() => { const p = document.getElementById('phase-indicator');"
                                                     " return p.textContent.includes('Night') && p.classList.contains('night'); })()"))
@@ -114,7 +135,7 @@ def run(base, run_dir, C, browser):
     park_mouse(pg)
     pg.keyboard.press("n")
     pg.wait_for_timeout(800)
-    C.check("N jumps to the next night", 200 < current_time(pg) < 230, str(current_time(pg)))
+    C.check("N jumps to the next night", 270 < current_time(pg) < 290, str(current_time(pg)))
 
     pg.evaluate(f"document.getElementById('video').currentTime = {DAY_T}")
     pg.wait_for_timeout(1500)

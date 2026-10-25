@@ -29,7 +29,7 @@ werewolf_viewer/
 │   ├── models/            # Local PaddleOCR model weights (gitignored, ~165MB)
 │   │   ├── PP-OCRv5_server_det/  # Text detection model
 │   │   └── PP-OCRv5_server_rec/  # Text recognition model (Chinese)
-│   ├── benchmarks/        # Performance benchmarks (gitignored)
+│   ├── benchmarks/        # Performance benchmarks (tracked; the dir is in .gitignore, so new files need git add -f)
 │   │   ├── benchmark.py       # Parallel vs sequential + ground truth validation
 │   │   ├── benchmark_full.py  # Night + name + full pipeline profiling
 │   │   └── benchmark_ocr.py   # OCR model configuration benchmark (server vs mobile)
@@ -602,7 +602,7 @@ The user watches games on the server while development goes on, so there are two
 - `player`: regression walk of the core viewer (library grouping, masks and modes, per-seat frames,
   role panel by role/seat with pack-wolf reveal, the 看牌 marker / panel row / jump / no masks or
   overlay during it, night overlay/auto-mute/jumps, mute, edit + reset persistence, fullscreen mask
-  fit, hidden-roles behaviour; 49 checks). `bookmarks`: the /api/state contract
+  fit, hidden-roles behaviour; 54 checks). `bookmarks`: the /api/state contract
   (validation, 403/413, merge, 30 concurrent writers, corrupt file) and the UI (row/info-bar/B-key
   stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
   saves, switch and tab-close saves, watched games, another device, touch, survival of

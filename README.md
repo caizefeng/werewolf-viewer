@@ -75,6 +75,8 @@ Search the channel from the right-hand panel and press **Download**. Each row ha
 
 Dragging a night boundary, resizing a mask from its inner edge, or using **✎ Edit** (add a night phase at the current time, add a mask, reset either) saves to the game's metadata immediately. The detected values are kept, so **Reset** always returns to them.
 
+A tab that has been open for a while can't overwrite newer data. If the game changed after the page loaded it (re-analysed, or edited in another tab or on another device), the save is refused, and the page loads the current version and asks you to redo the edit.
+
 ![The Edit popover in the controls bar](docs/screenshots/edit-menu.png)
 
 ### Keyboard
@@ -90,9 +92,9 @@ Dragging a night boundary, resizing a mask from its inner edge, or using **✎ E
 
 ## How it works
 
-**Card viewing** (`processing/analyze_cards.py`). The same 2 s scan also measures how much a small thumbnail changes over a quarter second. Stretches where the camera keeps moving are re-scanned at 0.5 s, split into shots, and grown to the long still shot on each side; a stretch counts as the seat tour when it lasts 25-80 s and enough of it is pans or cuts (a slower tour qualifies when the red night light follows within 30 s). A short table shot at nightfall is trimmed off, and a later tour counts only as a re-deal, before the first day. Checked against all 31 tours in 28 hand-verified games (S21-S23, open and hidden roles): every tour found, no false ones.
+**Card viewing** (`processing/analyze_cards.py`). The same 2 s scan also measures how much a small thumbnail changes over a quarter second. Stretches where the camera keeps moving are re-scanned at 0.5 s, split into shots, and grown to the long still shot on each side; a stretch counts as the seat tour when it lasts 25-80 s and enough of it is pans or cuts (a slower tour qualifies when the red night light follows within 30 s). A short table shot at nightfall is trimmed off, and a later tour counts only as a re-deal, before the first day. Checked against all 31 tours in 28 hand-verified games from three seasons, open and hidden roles: every tour found, no false ones.
 
-**Night detection** (`processing/analyze_night.py`). Three threads scan the bottom corners of a frame every 2 s and compute the red-to-green ratio; red studio light reads 2.5 and above, daylight about 1.1. Red clusters are merged into nights by three rules: both gap boundaries are camera cuts; the gap stays red-tinted (close-ups during a night); or, for newer broadcasts that cut away for minutes at a time, no day evidence lies in the gap. Day evidence is the player sidebar being on screen, or the broadcast's own 天黑请闭眼 / 天亮请睁眼 banners, found by OCR only inside candidate gaps. Boundaries are then refined at 0.25 s. No night starts before the card viewing ends (pre-game lighting and the red tablecloth in the tour's close-ups used to start some first nights early): the first night starts exactly where the card viewing ends, and one the red light missed is filled in from there, to the commentators' cut back to the table in hidden-roles broadcasts or else to the first sighting of the sidebar. The detector is validated against 17 hand-verified games (0 false positives, 0 misses) plus the first nights of 9 more.
+**Night detection** (`processing/analyze_night.py`). Three threads scan the bottom corners of a frame every 2 s and compute the red-to-green ratio; red studio light reads 2.5 and above, daylight about 1.1. Red clusters are merged into nights by three rules: both gap boundaries are camera cuts; the gap stays red-tinted (close-ups during a night); or, for newer broadcasts that cut away for minutes at a time, no day evidence lies in the gap. Day evidence is the player sidebar being on screen, or the broadcast's own 天黑请闭眼 / 天亮请睁眼 banners, found by OCR only inside candidate gaps. Boundaries are then refined at 0.25 s. No night starts before the card viewing ends (pre-game lighting and the red tablecloth in the tour's close-ups used to start some first nights early): the first night starts exactly where the card viewing ends, and one the red light missed is filled in from there, to the commentators' cut back to the table in hidden-roles broadcasts or else to the first sighting of the sidebar. The detector is validated against 17 hand-verified games (0 false positives, 0 misses) plus the first nights of 11 more.
 
 **Role map** (`processing/analyze_names.py`). PaddleOCR (PP-OCRv6 medium) reads the left and right 30% of a few frames and keeps the vertical boxes in the role column: known role names, misreads snapped to the nearest name, annotated labels such as 机械通灵 mapped to 机械狼, and labels the list does not know yet kept as read when every frame agrees on them. Rows are clustered, seat numbers come from the number badges and the fixed row pitch, and every seat gets a reveal band from a 6-row layout fitted to the rows that were read, so seat reveal works even where a label was not recognised. The ribbon colour behind each label gives the faction. Only seat numbers identify players; names are never extracted.
 
@@ -133,6 +135,7 @@ The command line does the same work as the UI:
 ```bash
 python3 processing/download.py --video-id="VIDEO_ID"     # quote IDs that start with a dash
 python3 processing/analyze.py --video-id="VIDEO_ID"      # writes videos/VIDEO_ID/metadata.json
+python3 processing/analyze.py --video-id="VIDEO_ID" --keep-edits   # re-analyse, keep edited nights / masks
 python3 processing/update_role_maps.py [VIDEO_ID ...]    # re-scan roles only, keeps manual edits
 ```
 
@@ -167,6 +170,7 @@ Browser end-to-end tests drive the real UI with Playwright against a throwaway s
 pip install -r tests/requirements.txt && playwright install chromium   # once, in processing/venv
 python3 tests/e2e/run.py              # player regression walk + bookmarks/resume suite
 python3 tests/e2e/run.py bookmarks    # one suite
+python3 tests/e2e/run.py --fresh      # re-analyse the demo games first (after pipeline changes)
 ```
 
 ## Project structure
@@ -176,6 +180,7 @@ werewolf-viewer/
 ├── processing/
 │   ├── analyze.py              # pipeline: night + role detection in parallel, writes metadata.json
 │   ├── analyze_night.py        # night phases (corner redness, cut/ratio/evidence merging, refinement)
+│   ├── analyze_cards.py        # card viewing (看牌): the seat tour, from camera motion
 │   ├── analyze_names.py        # role map and masks (PaddleOCR), banner and sidebar checks
 │   ├── update_role_maps.py     # re-scan roles only, preserving manual edits
 │   ├── download.py             # yt-dlp download with client fallbacks
@@ -184,10 +189,11 @@ werewolf-viewer/
 ├── web/
 │   ├── vite.config.js          # dev server: API, job queue, file serving
 │   └── src/                    # main.js (library, search, jobs), player.js (player, masks, reveal), style.css
-├── scripts/                  # start.sh / stop.sh [prod|dev], deploy.sh, dev-library.sh
+├── scripts/                    # start.sh / stop.sh [prod|dev], deploy.sh, dev-library.sh
 ├── tests/e2e/                  # browser end-to-end tests (demo library, Playwright)
 ├── docs/screenshots/           # README images (demo games)
-└── videos/                     # downloaded games + metadata (gitignored)
+├── videos/                     # downloaded games + metadata (gitignored)
+└── videos-dev/                 # the dev instance's library (gitignored)
 ```
 
 ## API
@@ -202,7 +208,7 @@ werewolf-viewer/
 | GET | `/api/job-status` | Every job: phase, elapsed time, timings, queue position |
 | POST | `/api/stop` | Stop one job, body `{videoId}` |
 | POST | `/api/delete` | Delete a game, body `{videoId}` (refused while its job runs) |
-| POST | `/api/metadata` | Save edited night phases and masks, body `{videoId, night_phases, name_masks}` |
+| POST | `/api/metadata` | Save edited night phases and masks, body `{videoId, version, night_phases, name_masks}`; `version` is the `X-Metadata-Version` header the page loaded metadata.json with, and a stale one gets 409 |
 | POST | `/api/state` | Save a game's bookmark and resume point, body `{videoId, bookmarked?, position?, duration?}` |
 
 ## Tuning
@@ -219,7 +225,7 @@ Night detection constants live at the top of `processing/analyze_night.py`:
 | `MIN_PHASE_DURATION` | 35 s | Shorter red stretches are ignored |
 | `ENTRY_BUFFER` / `EXIT_BUFFER` | 2 s / 1 s | Overlay lead before red-on and lag after red-off |
 
-Reveal band geometry is `BAND_PAD` and `BAND_GUARD` in `web/src/player.js`.
+Card-viewing thresholds (`CARD_*`: tour length, pan and motion shares, re-deal window) are at the top of `processing/analyze_cards.py`. Reveal band geometry is `BAND_PAD` and `BAND_GUARD` in `web/src/player.js`.
 
 ## License
 

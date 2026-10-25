@@ -313,7 +313,7 @@ The user watches games on the server while development goes on, so there are two
   zHCN-nyQ9jA 6:43-7:26, 02bLRRi6RZk 5:49-6:30, zla5T_T4UKQ 6:15-6:54; S23 xNDz6SStaLo 8:37-9:17,
   QNxo5hmWLN0 6:27-7:03 + 16:39-17:20, pZ0vo8VRDkA 7:28-8:05 + 13:47-14:23, bzsBWNpIwpo 10:24-11:10,
   fgw-4eUV0JE 5:45-6:21, HpIM5xTU-t8 6:17-6:56, X5J6PIMh368 6:28-7:07, 3oifxz_xLr4 6:37-7:15,
-  40RdPP2AuMs 7:14-7:52, CBZfebaxD0E 7:30-8:07. 31/31 found, 0 false tours (18 candidates rejected)
+  40RdPP2AuMs 7:14-7:52, CBZfebaxD0E 7:30-8:07. 31/31 found, 0 false tours. Final run: every end within 0.25 s of the marked second, every start too except Xk65eicHSyw (2.75 s early); the 8 look-alikes that reached a fine scan (pre-game in ZusP81Ycn-U, bzsBWNpIwpo and Jnf_dLaVNMU; inside night 1 and after dawn in CBZfebaxD0E) scored pans 0-20% / moving 2-25%, the tours 24-63% / 34-62% and 36-54 s
 
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR **PP-OCRv6 medium** det+rec (paddleocr 3.7.0) to find Chinese role names (狼人,

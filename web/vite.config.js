@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
@@ -251,6 +252,11 @@ const MAX_BODY_BYTES = 1_000_000;
 // Stored next to the video (videos/<id>/viewer_state.json) so it is shared
 // by every device on the LAN, untouched by re-analysis (which rewrites only
 // metadata.json) and removed together with the game.
+// Version of a metadata.json (its content), served with it and checked on save
+function metadataVersion(buffer) {
+  return crypto.createHash("sha1").update(buffer).digest("hex").slice(0, 16);
+}
+
 const VIEWER_STATE_FILE = "viewer_state.json";
 const MAX_MEDIA_SECONDS = 48 * 3600;
 
@@ -481,7 +487,7 @@ export default defineConfig({
             if (blockCrossOrigin(req, res)) return;
             const body = await readBody(req, res);
             if (!body) return;
-            const { videoId, night_phases, name_masks } = body;
+            const { videoId, version, night_phases, name_masks } = body;
             if (!videoId || !VIDEO_ID_RE.test(videoId)) return jsonResponse(res, 400, { error: "Invalid videoId" });
             const phasesOk = Array.isArray(night_phases) && night_phases.every(
               (p) => p && Number.isFinite(p.start) && Number.isFinite(p.end));
@@ -493,15 +499,23 @@ export default defineConfig({
             const metaPath = path.join(videosDir, videoId, "metadata.json");
             if (!fs.existsSync(metaPath)) return jsonResponse(res, 404, { error: "Not found" });
             try {
-              const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+              const current = fs.readFileSync(metaPath);
+              // The page sends the version it loaded: if the file changed since
+              // (re-analysed, or saved from another tab or device), its copy of
+              // the nights and masks is stale and writing it would undo that
+              if (version !== undefined && version !== metadataVersion(current)) {
+                return jsonResponse(res, 409, { error: "Metadata changed since it was loaded", stale: true });
+              }
+              const meta = JSON.parse(current.toString("utf-8"));
               meta.original_night_phases ??= meta.night_phases;
               meta.original_name_masks ??= meta.name_masks;
               meta.night_phases = night_phases.map((p) => ({ start: p.start, end: p.end }));
               meta.name_masks = name_masks.map((m) => ({ x: m.x, y: m.y, w: m.w, h: m.h }));
+              const text = JSON.stringify(meta, null, 2);
               const tmpPath = metaPath + ".tmp";
-              fs.writeFileSync(tmpPath, JSON.stringify(meta, null, 2));
+              fs.writeFileSync(tmpPath, text);
               fs.renameSync(tmpPath, metaPath);
-              return jsonResponse(res, 200, { saved: true });
+              return jsonResponse(res, 200, { saved: true, version: metadataVersion(Buffer.from(text)) });
             } catch (err) {
               return jsonResponse(res, 500, { error: err.message });
             }
@@ -625,6 +639,16 @@ export default defineConfig({
                 res.on("close", () => stream.destroy());
                 stream.pipe(res);
               }
+            } else if (path.basename(filePath) === "metadata.json") {
+              // Edits are saved against the version a page loaded (see
+              // /api/metadata), so never let a browser cache it
+              const body = fs.readFileSync(filePath);
+              res.writeHead(200, {
+                "Content-Type": mime,
+                "Cache-Control": "no-store",
+                "X-Metadata-Version": metadataVersion(body),
+              });
+              res.end(body);
             } else {
               res.writeHead(200, { "Content-Type": mime });
               const stream = fs.createReadStream(filePath);

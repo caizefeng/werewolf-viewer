@@ -5,7 +5,7 @@ auto-mute, night jumps, mute, edit persistence, fullscreen mask fit and the
 hidden-roles behaviour."""
 import json
 
-from harness import (G1, G2, G3, DEMO_IDS, active_id, ctl, current_time, open_app, open_panel, park_mouse,
+from harness import (G1, G2, G3, DEMO_IDS, active_id, api, ctl, current_time, open_app, open_panel, park_mouse,
                      show_controls, watch_errors, wrapper_box)
 
 PACK = {1, 6, 8, 12}          # the 狼人 seats of demo game 1 (all pack wolves)
@@ -161,6 +161,37 @@ def run(base, run_dir, C, browser):
     pg.wait_for_timeout(1200)
     saved = json.loads((run_dir / G1 / "metadata.json").read_text())
     C.check("Reset nights restores the detected phases", len(saved["night_phases"]) == before)
+
+    # A page holding an outdated copy must not undo a newer write (a
+    # re-analysis, or a save from another tab): the server refuses it and the
+    # page loads the current version
+    meta_path = run_dir / G1 / "metadata.json"
+    hdr = pg.evaluate(f"fetch('/{G1}/metadata.json').then(r => [r.headers.get('X-Metadata-Version'), r.headers.get('Cache-Control')])")
+    C.check("metadata.json is served with a version and never cached", bool(hdr[0]) and hdr[1] == "no-store", str(hdr))
+    st, r = api(base, "/api/metadata", {"videoId": G1, "version": "0000000000000000",
+                                        "night_phases": saved["night_phases"], "name_masks": saved["name_masks"]})
+    C.check("a save against an old version is refused (409)", st == 409 and r.get("stale") is True, f"{st} {r}")
+    newer = json.loads(meta_path.read_text())
+    newer["night_phases"] = newer["night_phases"] + [{"start": 395.0, "end": 400.0}]
+    meta_path.write_text(json.dumps(newer, ensure_ascii=False, indent=2))   # e.g. a re-analysis
+    ctl(pg, "#edit-menu-btn")
+    pg.wait_for_timeout(200)
+    pg.click("#add-phase-btn")
+    pg.wait_for_timeout(1500)
+    on_disk = json.loads(meta_path.read_text())
+    C.check("an edit made on an outdated page does not overwrite the newer file",
+            on_disk["night_phases"] == newer["night_phases"], str(len(on_disk["night_phases"])))
+    st_text = pg.evaluate("document.getElementById('status').textContent")
+    C.check("...the page loads the current version instead and says so",
+            "changed since it was opened" in st_text
+            and pg.evaluate("document.querySelectorAll('.night-marker').length") == len(newer["night_phases"]), st_text)
+    ctl(pg, "#edit-menu-btn")
+    pg.wait_for_timeout(200)
+    pg.click("#reset-nights-btn")
+    pg.wait_for_timeout(1200)
+    C.check("...and its next edit saves normally",
+            len(json.loads(meta_path.read_text())["night_phases"]) == before
+            and "saved" in pg.evaluate("document.getElementById('status').textContent"))
 
     ctl(pg, "#fullscreen-btn")
     pg.wait_for_timeout(1500)

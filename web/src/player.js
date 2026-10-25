@@ -166,9 +166,11 @@ export class WerewolfPlayer {
   async loadMetadata(url) {
     this.metadata = null;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       this.metadata = await res.json();
+      // Saves carry this, so the server can refuse a stale copy (see saveMetadata)
+      this.metadataVersion = res.headers.get("X-Metadata-Version");
       // Reset restores the auto-detected values (preserved server-side in
       // original_* once the user saves edits); fall back to loaded values
       this._defaultNameMasks = JSON.parse(JSON.stringify(
@@ -219,6 +221,7 @@ export class WerewolfPlayer {
   // Drop the loaded video's state (used when it is deleted)
   clear() {
     this.metadata = null;
+    this.metadataVersion = null;
     this.videoId = null;
     this.roleMap = {};
     this.revealed = new Set();
@@ -235,19 +238,40 @@ export class WerewolfPlayer {
   }
 
   // Persist current night phases + masks back to the server's metadata.json
-  async saveMetadata() {
+  saveMetadata() {
+    // One save at a time: each sends the version the previous one returned
+    this._saving = (this._saving || Promise.resolve()).then(() => this._save());
+    return this._saving;
+  }
+
+  async _save() {
     if (!this.videoId || !this.metadata) return;
+    const videoId = this.videoId;
     try {
       const res = await fetch("/api/metadata", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          videoId: this.videoId,
+          videoId,
+          version: this.metadataVersion ?? undefined,
           night_phases: this.metadata.night_phases,
           name_masks: this.metadata.name_masks,
         }),
       });
+      if (res.status === 409) {
+        // The game was re-analysed, or edited in another tab or on another
+        // device, after this page loaded it: saving this page's copy would
+        // undo that. Load the current version instead
+        if (this.videoId === videoId) {
+          await this.loadMetadata(`/${videoId}/metadata.json`);
+          this.statusEl.textContent = "This game changed since it was opened (re-analysed or edited elsewhere): " +
+            "loaded the current version, please redo your last edit";
+        }
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (this.videoId === videoId) this.metadataVersion = data.version;
       this.statusEl.textContent += " · saved";
     } catch (err) {
       this.statusEl.textContent = `Failed to save edits: ${err.message}`;

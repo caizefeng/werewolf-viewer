@@ -169,10 +169,20 @@ class Checks:
 
 
 def watch_errors(page):
-    """Collect page errors and console errors on a page."""
+    """Collect page errors and console errors on a page. A 409 from
+    /api/metadata is expected (a stale save refused) and not collected:
+    Chromium logs every non-2xx fetch as a console error."""
     errors = []
+
+    def on_console(m):
+        if m.type != "error":
+            return
+        if "status of 409" in m.text and (m.location or {}).get("url", "").endswith("/api/metadata"):
+            return
+        errors.append(f"console: {m.text}")
+
     page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
-    page.on("console", lambda m: errors.append(f"console: {m.text}") if m.type == "error" else None)
+    page.on("console", on_console)
     return errors
 
 

@@ -3,8 +3,9 @@ videos/*
 !videos/.gitkeep
 
 # Python
-processing/venv/
-processing/models/
+# (no trailing slash: the .prod worktree has these as symlinks)
+processing/venv
+processing/models
 processing/benchmarks/
 __pycache__/
 *.pyc

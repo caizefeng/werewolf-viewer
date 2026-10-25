@@ -44,22 +44,32 @@ def _compute_rg_ratio(roi):
     return mean[2] / (mean[1] + 1)
 
 
+def _thumb_colour(frame):
+    """32x18 BGR thumbnail (uint8): which set or shot a frame shows."""
+    return cv2.resize(frame, (32, 18), interpolation=cv2.INTER_AREA)
+
+
+def _grey(thumb):
+    return cv2.cvtColor(thumb, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+
 def _thumb(frame):
     """32x18 grey thumbnail (float32) for cheap motion / cut measures."""
-    small = cv2.resize(frame, (32, 18), interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    return _grey(_thumb_colour(frame))
 
 
 def _read_motion(cap, pos, sec, fps, frame):
     """Read the frame MOTION_DT after `frame` (at frame index pos-1) and
-    return (motion, new pos); motion is 0.0 at the end of the video."""
+    return (motion, colour thumb of `frame`, new pos); motion is 0.0 at the
+    end of the video."""
     target = int(round((sec + MOTION_DT) * fps))
+    thumb = _thumb_colour(frame)
     while pos < target and cap.grab():
         pos += 1
     ret, later = cap.read()
     if not ret:
-        return 0.0, pos
-    return float(np.abs(_thumb(later) - _thumb(frame)).mean()), pos + 1
+        return 0.0, thumb, pos
+    return float(np.abs(_thumb(later) - _grey(thumb)).mean()), thumb, pos + 1
 
 
 def _frame_redness(frame):
@@ -111,6 +121,7 @@ def _scan_segment(args):
     ratios = []
     diffs = []
     motions = []
+    thumbs = []
 
     for sec in range(start_sec, end_sec, scan_interval):
         # Advance to the exact frame for this timestamp
@@ -129,19 +140,21 @@ def _scan_segment(args):
         else:
             diffs.append(0.0)
         prev_frame = frame
-        motion, pos = _read_motion(cap, pos, sec, fps, frame)
+        motion, thumb, pos = _read_motion(cap, pos, sec, fps, frame)
         motions.append(motion)
+        thumbs.append(thumb)
 
     cap.release()
-    return timestamps, ratios, diffs, motions
+    return timestamps, ratios, diffs, motions, thumbs
 
 
 def scan_corner_redness(video_path, num_workers=0):
     """Scan at SCAN_INTERVAL: compute max R/G ratio and frame-to-frame diff.
 
-    Returns (timestamps, ratios, diffs, motions) — parallel arrays of sampled
-    points. diffs[i] = mean absolute pixel difference between frame i and
-    frame i-1; motions[i] = thumbnail change over the MOTION_DT after frame i.
+    Returns (timestamps, ratios, diffs, motions, thumbs) — parallel arrays of
+    sampled points. diffs[i] = mean absolute pixel difference between frame i
+    and frame i-1; motions[i] = thumbnail change over the MOTION_DT after
+    frame i; thumbs[i] = its 32x18 colour thumbnail (uint8).
 
     num_workers: 0=auto (3 threads), 1=sequential, N=use N threads.
     Threading is used because cv2 releases the GIL during video decode.
@@ -179,16 +192,18 @@ def scan_corner_redness(video_path, num_workers=0):
     all_ratios = []
     all_diffs = []
     all_motions = []
-    for ts, rs, ds, ms in results:
+    all_thumbs = []
+    for ts, rs, ds, ms, th in results:
         all_timestamps.extend(ts)
         all_ratios.extend(rs)
         all_diffs.extend(ds)
         all_motions.extend(ms)
+        all_thumbs.extend(th)
 
     print(f"  Sampled {len(all_timestamps)} frames ({duration}s video, "
           f"{SCAN_INTERVAL}s interval, {len(segments)} workers)")
     return (np.array(all_timestamps), np.array(all_ratios), np.array(all_diffs),
-            np.array(all_motions))
+            np.array(all_motions), np.array(all_thumbs, dtype=np.uint8).reshape(-1, 18, 32, 3))
 
 
 def _scan_sequential(video_path, fps, duration):
@@ -198,6 +213,7 @@ def _scan_sequential(video_path, fps, duration):
     ratios = []
     diffs = []
     motions = []
+    thumbs = []
     prev_frame = None
     pos = 0  # frame index of the next read; frame-accurate for fractional fps
 
@@ -217,12 +233,14 @@ def _scan_sequential(video_path, fps, duration):
         else:
             diffs.append(0.0)
         prev_frame = frame
-        motion, pos = _read_motion(cap, pos, sec, fps, frame)
+        motion, thumb, pos = _read_motion(cap, pos, sec, fps, frame)
         motions.append(motion)
+        thumbs.append(thumb)
 
     cap.release()
     print(f"  Sampled {len(timestamps)} frames ({duration}s video, {SCAN_INTERVAL}s interval)")
-    return np.array(timestamps), np.array(ratios), np.array(diffs), np.array(motions)
+    return (np.array(timestamps), np.array(ratios), np.array(diffs), np.array(motions),
+            np.array(thumbs, dtype=np.uint8).reshape(-1, 18, 32, 3))
 
 
 def find_red_clusters(timestamps, ratios, threshold=RED_THRESH, max_internal_gap=5):
@@ -523,8 +541,8 @@ def filter_cut_bounded_phases(phases, timestamps, diffs, cut_thresh=CUT_THRESH):
     return result
 
 
-def _scan_window(cap, fps, t0, t1, step=REFINE_STEP):
-    """Yield (t, redness) for t in [t0, t1) at `step` resolution.
+def _frames(cap, fps, t0, t1, step=REFINE_STEP):
+    """Yield (t, frame) for t in [t0, t1) at `step` resolution.
 
     Seeks once, then decodes sequentially (a seek per sample would decode
     from the previous keyframe every time).
@@ -540,6 +558,12 @@ def _scan_window(cap, fps, t0, t1, step=REFINE_STEP):
         if not ret:
             return
         pos += 1
+        yield t, frame
+
+
+def _scan_window(cap, fps, t0, t1, step=REFINE_STEP):
+    """Yield (t, redness) for t in [t0, t1) at `step` resolution."""
+    for t, frame in _frames(cap, fps, t0, t1, step):
         yield t, _frame_redness(frame)
 
 
@@ -581,19 +605,30 @@ def refine_boundaries(video_path, phases, threshold=RED_THRESH):
 
 # ── Card viewing (看牌) and the first night ──
 # The first night falls as the card-viewing tour ends: the director cuts from
-# the last close-up to the table, and the red light comes on 0-7 s later
-# (S21) or at once (S23). A night starting inside the tour (its close-ups of
-# the red tablecloth read as night light; S22 first nights began 10-40 s
-# early) is clipped to the tour's end; one starting after it keeps its
-# red-light start. When no night follows within CARD_NIGHT_LINK at all
-# (S22E48 G2: the studio never switched the red light on for night 1;
-# hidden-roles broadcasts spend the night on the commentators), the night
-# runs from the tour's end to the first sighting of the player sidebar,
-# which only shows in daytime: searched every DAWN_SEARCH_STEP from
-# DAWN_SEARCH_FROM after the tour (first nights last 2.7-6 min) up to
-# DAWN_SEARCH_TO, then narrowed to ~2 s. It overshoots dawn by the time the
-# sidebar takes to appear (~0.5 min), never undershoots.
+# the last close-up to the table and the judge says "天黑请闭眼"; the red light
+# comes on 0-7 s later (S21) or at once (S23). So the night after a tour
+# starts exactly where the tour ends: a red night starting inside the tour
+# (its close-ups of the red tablecloth read as night light; S22 first nights
+# began 10-40 s early) or up to CARD_NIGHT_LINK after it is pinned there.
+# When none starts that soon the night was missed, and is inserted:
+# - hidden-roles broadcasts show the table for a few seconds, then cover the
+#   night with the commentators, i.e. the set shown just before the tour,
+#   and cut back at dawn (S22E47 G2/G3, S22E48 G1). If that set returns
+#   within COVER_WITHIN of the tour and stays (gaps < COVER_GAP) for at
+#   least COVER_MIN, the night ends when it leaves (to ~0.25 s), or when the
+#   red light goes off on the table it cuts back to (S22E47 G2: 3 s later);
+# - otherwise (S22E48 G2: the studio never switched the red light on for
+#   night 1) the night runs to the first sighting of the player sidebar,
+#   which only shows in daytime: searched every DAWN_SEARCH_STEP from
+#   DAWN_SEARCH_FROM after the tour (first nights last 2.7-6 min) up to
+#   DAWN_SEARCH_TO, then narrowed to ~2 s. That overshoots dawn by the time
+#   the sidebar takes to appear (~0.5 min), but never undershoots.
 CARD_NIGHT_LINK = 90
+COVER_SAME = 20    # mean colour-thumbnail difference: still the pre-tour set
+COVER_WITHIN = 30
+COVER_GAP = 12
+COVER_MIN = 30
+COVER_RED_MAX = 20  # s past the commentators the table may stay red-lit
 DAWN_SEARCH_FROM = 150
 DAWN_SEARCH_TO = 600
 DAWN_SEARCH_STEP = 20
@@ -644,21 +679,65 @@ def first_sidebar_after(evidence, t0, t1, step=DAWN_SEARCH_STEP):
     return None
 
 
-def _link_first_nights(results, cards, evidence, duration):
-    """Keep the night after each card tour out of the tour, inserting it
-    when no night was detected (see CARD_NIGHT_LINK)."""
+def _covered_night_end(video_path, timestamps, thumbs, cs, ce, limit):
+    """End of a night the broadcast covers with the commentators (the set
+    shown just before the tour at cs..ce), or None when it does not go back
+    to that set right after the tour (see COVER_*)."""
+    pre = (timestamps >= cs - 10) & (timestamps <= cs - 2)
+    if pre.sum() < 3:
+        return None
+    ref = np.median(thumbs[pre].astype(np.float32), axis=0)
+    m = (timestamps > ce) & (timestamps < limit)
+    dist = np.abs(thumbs[m].astype(np.float32) - ref).mean(axis=(1, 2, 3))
+    hits = timestamps[m][dist < COVER_SAME]
+    if not len(hits) or hits[0] > ce + COVER_WITHIN:
+        return None
+    last = hits[0]
+    for t in hits[1:]:
+        if t - last > COVER_GAP:
+            break
+        last = t
+    if last - hits[0] < COVER_MIN:
+        return None
+    # The cut away from the set lies within the next sample interval. The
+    # table it cuts back to can still be red-lit for a few seconds: the
+    # night lasts until that light goes off
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    end = None
+    for t, frame in _frames(cap, fps, float(last) + REFINE_STEP, float(last) + COVER_RED_MAX):
+        if end is None:
+            if np.abs(_thumb_colour(frame).astype(np.float32) - ref).mean() >= COVER_SAME:
+                end = t
+            elif t >= last + SCAN_INTERVAL:
+                end = float(last) + SCAN_INTERVAL
+        if end is not None:
+            if _frame_redness(frame) < RED_THRESH:
+                break
+            end = t + EXIT_BUFFER
+    cap.release()
+    return end if end is not None else float(last) + SCAN_INTERVAL
+
+
+def _link_first_nights(results, cards, evidence, duration, video_path, timestamps, thumbs):
+    """Start the night after each card tour where the tour ends, inserting
+    it when it was missed (see CARD_NIGHT_LINK)."""
     for k, (cs, ce) in enumerate(cards):
         nxt = cards[k + 1][0] if k + 1 < len(cards) else float("inf")
         after = sorted((p for p in results if p["end"] > ce and p["start"] < nxt),
                        key=lambda p: p["start"])
         first = after[0] if after else None
         if first is not None and first["start"] <= ce + CARD_NIGHT_LINK:
-            first["start"] = round(max(first["start"], ce), 2)
+            first["start"] = round(ce, 2)
             continue
         limit = min(ce + DAWN_SEARCH_TO, nxt, duration - 1)
-        print(f"  No night follows the card viewing at {_fmt(ce)}: "
-              f"looking for the first day's sidebar...")
-        dawn = first_sidebar_after(evidence, ce + DAWN_SEARCH_FROM, limit)
+        print(f"  No night follows the card viewing at {_fmt(ce)}:")
+        dawn = _covered_night_end(video_path, timestamps, thumbs, cs, ce, limit)
+        if dawn is not None:
+            print(f"    the commentators cover it until {_fmt(dawn)}")
+        else:
+            print("    looking for the first day's sidebar...")
+            dawn = first_sidebar_after(evidence, ce + DAWN_SEARCH_FROM, limit)
         if dawn is None:
             print("    sidebar not found; first night left undetected")
         elif first is not None and first["start"] < dawn:
@@ -675,14 +754,18 @@ def _fmt(t):
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
-def analyze_phases(video_path, num_workers=0):
+def analyze_phases(video_path, num_workers=0, scan=None):
     """Detect the card-viewing tours and the night phases.
 
     Returns {"night_phases": [{start, end}], "card_phases": [{start, end}]}.
     num_workers: 0=auto, 1=sequential, N=use N workers for frame scanning.
+    scan: scan_corner_redness() output to reuse (development: re-running the
+    rest of the pipeline without the minutes-long scan).
     """
-    print("Scanning bottom corners for ambient light changes...")
-    timestamps, ratios, diffs, motions = scan_corner_redness(video_path, num_workers)
+    if scan is None:
+        print("Scanning bottom corners for ambient light changes...")
+        scan = scan_corner_redness(video_path, num_workers)
+    timestamps, ratios, diffs, motions, thumbs = scan
 
     if len(timestamps) == 0:
         print("No frames scanned.")
@@ -738,7 +821,7 @@ def analyze_phases(video_path, num_workers=0):
                 "start": round(max(0, s - ENTRY_BUFFER), 2),
                 "end": round(min(duration - 1, e + EXIT_BUFFER), 2),
             })
-        results = _link_first_nights(results, cards, evidence, duration)
+        results = _link_first_nights(results, cards, evidence, duration, video_path, timestamps, thumbs)
     finally:
         evidence.close()
 

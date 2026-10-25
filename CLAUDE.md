@@ -199,18 +199,31 @@ The user watches games on the server while development goes on, so there are two
   **refine_boundaries** → add buffers → **_link_first_nights**. All OCR (gap checks, banner checks,
   the card search's day checks, the dawn search) shares one lazily loaded `_Evidence` (OCR + capture),
   so OCR loads only when something needs it
-- **_link_first_nights** (CARD_NIGHT_LINK=90): the night after each tour is clipped so it never
-  starts inside the tour (S22 first nights used to start 10-40 s early, inside it: E47G1 7:13 instead
-  of 7:43, E48G3, E49G2; E49G1's first "night" even started at 0:16); one starting after the tour
-  keeps its red-light start (S21 lights come on 0-7 s after the cut to the table, S23 at once). If no
-  night starts within 90 s of a tour's end, night 1 was missed -- S22E48 G2: the studio never switched
-  the red light on for night 1 (8:43-13:17), so masks stayed off until the second night ended at
-  56:49 (user report 2026-10-25); hidden-roles broadcasts spend the night on the commentators. Night 1
-  is then inserted from the tour's end to the first sidebar sighting (`first_sidebar_after`: OCR every
-  DAWN_SEARCH_STEP=20 s from DAWN_SEARCH_FROM=150 s after the tour up to DAWN_SEARCH_TO=600 s, then
-  bisected to ~2 s). It overshoots dawn by the ~0.5 min the sidebar takes to appear, never undershoots
-- The scan also records `motions`: each 2 s sample reads the frame MOTION_DT (0.25 s) later and
-  stores the mean change of 32x18 grey thumbnails (camera motion or a cut), for the card search
+- **_link_first_nights** (CARD_NIGHT_LINK=90): the night after each tour starts exactly where the
+  tour ends -- the cut from the last seat close-up to the table, when the judge says 天黑请闭眼 (user
+  request 2026-10-25: "the 看牌 phase can also be used to correct the beginning and the end of the
+  first night"). A red night starting inside the tour (S22 first nights started 10-40 s early on the
+  red tablecloth: E47G1 7:13 instead of 7:43, E48G3, E49G2; E49G1's even started at 0:16) or up to
+  90 s after it is pinned there; S21's red light comes on 2-7 s after the cut, which the older ground
+  truth used. If no night starts within 90 s the first night was missed and is inserted:
+  - **hidden-roles broadcasts** show the table for 5-10 s, then cover the night with the
+    commentators -- the very set shown just before the tour -- and cut back at dawn (S22E47 G2/G3,
+    S22E48 G1). `_covered_night_end`: the pre-tour set (median 32x18 colour thumbnail of the scan
+    samples 10-2 s before the tour) must return within COVER_WITHIN (30 s) of the tour and stay
+    (mean thumbnail difference < COVER_SAME 20, gaps < COVER_GAP 12 s) for >= COVER_MIN (30 s); the
+    night ends when it leaves (refined at 0.25 s), or when the red light goes off on the table it cuts
+    back to (S22E47 G2: 13:32 -> 13:35, EXIT_BUFFER added). Was the first sidebar sighting, 35-50 s late
+  - otherwise (S22E48 G2: the studio never switched the red light on for night 1, 8:43-13:17, so masks
+    stayed off for all of day 1; user report 2026-10-25) the night runs to the first sidebar sighting
+    (`first_sidebar_after`: OCR every DAWN_SEARCH_STEP=20 s from DAWN_SEARCH_FROM=150 s after the tour up
+    to DAWN_SEARCH_TO=600 s, then bisected to ~2 s): 13:52, ~35 s late but never early. Matching the
+    night's opening table shot can't do better there: dawn only removes the commentators'
+    picture-in-picture, a 14.5-16 vs 11-14 mean-difference change, too close to separate reliably
+- `analyze_phases(..., scan=...)` reuses a saved `scan_corner_redness()` result (timestamps, ratios,
+  diffs, motions, thumbs) so the rest of the pipeline can be iterated without the minutes-long scan
+- The scan also records `motions` (each 2 s sample reads the frame MOTION_DT = 0.25 s later and stores
+  the mean change of 32x18 grey thumbnails: camera motion or a cut, for the card search) and `thumbs`
+  (the sample's 32x18 colour thumbnail, ~1.7 KB, for recognising the pre-tour set)
 - **refine_boundaries**: a raw boundary from the 2s grid is only known to within one interval, which
   made the overlay lead vary between ~1s and ~4s. Each boundary window — (start−2s, start] for red-on,
   [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding

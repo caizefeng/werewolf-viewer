@@ -28,3 +28,7 @@ processing/demo/library/
 
 # Browser test cache (demo library copies, logs)
 tests/.cache/
+
+# Production worktree (scripts/deploy.sh) and the dev instance library
+.prod/
+videos-dev/

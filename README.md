@@ -108,6 +108,16 @@ cd web && pnpm install && cd ..
 scripts/start.sh        # http://localhost:5173/ (LAN-reachable); scripts/stop.sh to stop
 ```
 
+The server runs as two instances, so work in progress never reaches the one people are watching:
+
+| | `scripts/start.sh prod` (default) | `scripts/start.sh dev` |
+|---|---|---|
+| URL | `:5173` | `:5174`, marked "dev" in the header |
+| Code | `.prod/`, a git worktree pinned to a commit | this working tree, hot-reloading |
+| Library | `videos/` | `videos-dev/` (`scripts/dev-library.sh ID...` hard-links games in) |
+
+`scripts/deploy.sh [REF]` moves production to a commit (default `HEAD`). It refuses while a production download or analysis is running.
+
 OCR models (about 165 MB) download into `processing/models/` on first use.
 
 The command line does the same work as the UI:
@@ -166,7 +176,7 @@ werewolf-viewer/
 ├── web/
 │   ├── vite.config.js          # dev server: API, job queue, file serving
 │   └── src/                    # main.js (library, search, jobs), player.js (player, masks, reveal), style.css
-├── scripts/start.sh, stop.sh   # background server
+├── scripts/                  # start.sh / stop.sh [prod|dev], deploy.sh, dev-library.sh
 ├── tests/e2e/                  # browser end-to-end tests (demo library, Playwright)
 ├── docs/screenshots/           # README images (demo games)
 └── videos/                     # downloaded games + metadata (gitignored)

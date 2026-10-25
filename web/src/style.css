@@ -129,6 +129,27 @@ header h1::after {
   );
 }
 
+/* Dev instance marker (scripts/start.sh dev): a badge after the title and an
+   amber rule along the top edge, so a dev tab is never taken for production */
+.instance-badge {
+  position: absolute;
+  top: 0.2rem;
+  left: calc(100% + 0.6rem);
+  padding: 0.15rem 0.5rem;
+  border: 1px solid rgba(240, 180, 60, 0.7);
+  border-radius: 4px;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #f0b43c;
+  background: rgba(240, 180, 60, 0.12);
+  text-shadow: none;
+}
+body.instance-dev {
+  border-top: 3px solid #f0b43c;
+}
+
 /* ── Main layout ── */
 #main-layout {
   display: flex;

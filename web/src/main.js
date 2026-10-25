@@ -1,5 +1,10 @@
 import { WerewolfPlayer } from "./player.js";
 
+// Which server this page came from (scripts/start.sh sets VITE_INSTANCE): the
+// dev instance labels itself so it is never mistaken for production
+const IS_DEV = import.meta.env.VITE_INSTANCE === "dev";
+const APP_NAME = IS_DEV ? "Werewolf Viewer (dev)" : "Werewolf Viewer";
+
 let player;
 let currentVideoId = null;
 
@@ -486,7 +491,7 @@ async function switchVideo(videoId) {
   const row = document.querySelector(`#video-list li[data-id="${videoId}"]`);
   const title = row?.dataset.title || row?.querySelector(".video-title")?.textContent || videoId;
   document.getElementById("video-title").textContent = title;
-  document.title = `${title} – Werewolf Viewer`;
+  document.title = `${title} – ${APP_NAME}`;
 
   // Load new metadata and video
   player.videoId = videoId;
@@ -933,7 +938,7 @@ async function removeVideo(videoId) {
     video.load();
     player.clear();
     document.getElementById("video-title").textContent = "";
-    document.title = "Werewolf Viewer";
+    document.title = APP_NAME;
   }
   jobSnapshot.delete(videoId);
   libState.delete(videoId);
@@ -998,6 +1003,15 @@ function updateGroupBusy(key) {
 // ── Init ──
 
 async function init() {
+  if (IS_DEV) {
+    document.title = APP_NAME;
+    document.body.classList.add("instance-dev");
+    const badge = document.createElement("span");
+    badge.className = "instance-badge";
+    badge.textContent = "dev";
+    badge.title = "Development instance: its own library (videos-dev/), code from the working tree";
+    document.querySelector("header h1").append(badge);
+  }
   player = new WerewolfPlayer(getElements());
   initWatchState();
 

@@ -152,7 +152,7 @@ The YouTube channel searched by default is set by `CHANNEL_URL` in `web/vite.con
 
 ### Demo mode
 
-To try the viewer without downloading anything, render the synthetic games and run a server against a scratch library:
+To try the viewer without downloading anything, render the synthetic games and run a server against a scratch library. The games look like a broadcast's speaking shot: the player who has the floor is a backlit silhouette at a desk with a seat name plate, and the role sidebar runs down both sides.
 
 ```bash
 source processing/venv/bin/activate
@@ -160,7 +160,12 @@ python3 processing/demo/make_demo_video.py          # three games into processin
 cd web && WEREWOLF_DEMO=1 WEREWOLF_VIDEOS_DIR=/tmp/demo-library pnpm exec vite --port 5174
 ```
 
-Search for `demo cup`, download the three games, and the real pipeline analyses them. This is how the screenshots above were made.
+Search for `demo cup`, download the three games, and the real pipeline analyses them. The screenshots above are taken the same way, by a script:
+
+```bash
+python3 tests/e2e/readme_screenshots.py              # retake docs/screenshots/ on the demo games
+python3 tests/e2e/readme_screenshots.py reveal-role  # just one
+```
 
 ## Tests
 

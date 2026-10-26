@@ -3,7 +3,11 @@
 
 Nothing here comes from a real stream: the stage, the player cards, the
 role ribbons, the night tint and the phase banners are all drawn, with
-made-up players. The layout follows what the analysis expects (role
+made-up players. Like a broadcast's speaking shot, the middle of the frame
+shows the player who has the floor, as a backlit silhouette at a desk with
+a seat name plate; the speaker changes every few seconds, and at night the
+camera stays on one player, who wears an eye mask under the red light.
+The layout follows what the analysis expects (role
 ribbons at x~0.10 / x~0.89, rows pitched 0.16 from y=0.125, number badges
 outward of the ribbons, sidebar hidden at night, "天黑请闭眼" / "天亮请睁眼"
 banners), so the real pipeline can analyse these clips end to end. Game 1
@@ -52,19 +56,94 @@ def font(size, cjk=True):
     return ImageFont.truetype(FONT_CJK, size)
 
 
-def draw_stage(d, day_no):
-    d.rectangle([0, 0, W, H], fill=(34, 32, 40))
-    d.rectangle([0, int(H * 0.62), W, H], fill=(58, 54, 62))          # floor
-    d.ellipse([W * 0.30, H * 0.40, W * 0.70, H * 0.88], fill=(84, 70, 60), outline=(120, 104, 90), width=6)
-    d.ellipse([W * 0.36, H * 0.47, W * 0.64, H * 0.81], fill=(110, 92, 78))
-    for i in range(12):                                                 # chairs around the table
-        a = 2 * np.pi * i / 12
-        cx, cy = W * 0.50 + np.cos(a) * W * 0.23, H * 0.64 + np.sin(a) * H * 0.29
-        d.ellipse([cx - 26, cy - 26, cx + 26, cy + 26], fill=(70, 66, 80), outline=(140, 134, 150), width=3)
-        d.text((cx, cy), str(i + 1), fill=(220, 215, 205), font=font(22), anchor="mm")
+SILHOUETTE = (26, 23, 32)
+
+
+def _backdrop():
+    """Studio wall: dark blue-violet with a warm backlight behind the
+    speaker's head, light strips, the desk and the floor."""
+    y, x = np.mgrid[0:H, 0:W].astype(np.float32)
+    r = np.sqrt(((x - W / 2) / (W * 0.25)) ** 2 + ((y - H * 0.40) / (H * 0.44)) ** 2)
+    k = (np.clip(1.15 - r, 0, 1) ** 1.6)[..., None]
+    wall = np.array([30, 28, 46], np.float32) * (1 - k) + np.array([224, 194, 160], np.float32) * k
+    img = Image.fromarray(wall.astype(np.uint8))
+    d = ImageDraw.Draw(img)
+    for xs in (0.335, 0.665):                                            # light strips
+        d.rounded_rectangle([W * xs - 7, H * 0.10, W * xs + 7, H * 0.74], radius=7, fill=(92, 86, 140))
+    d.rectangle([0, int(H * 0.86), W, H], fill=(40, 38, 50))             # floor
+    return img
+
+
+_BACKDROP = []
+
+
+def backdrop():
+    if not _BACKDROP:
+        _BACKDROP.append(_backdrop())
+    return _BACKDROP[0].copy()
+
+
+def person_mask(seat, cx=W / 2, scale=1.0, top=0.0):
+    """'L' mask of a seated player seen from the front, as a silhouette:
+    head, neck, shoulders, and a hairstyle and build that vary by seat.
+    Drawn at twice the size and scaled down for smooth edges."""
+    s = 2
+    m = Image.new("L", (W * s, H * s), 0)
+    d = ImageDraw.Draw(m)
+    x = cx * s
+    build = 1 + 0.06 * ((seat * 5) % 4 - 1.5) / 1.5                    # shoulders +-6%
+    u = scale * s
+    hy = (0.37 * H + top) * s                                            # head centre
+    hw, hh = 90 * u * (0.96 + 0.03 * (seat % 3)), 116 * u
+    sw = 320 * u * build
+    d.ellipse([x - sw, hy + 175 * u, x + sw, hy + 520 * u], fill=255)  # shoulders
+    d.rectangle([x - sw, hy + 340 * u, x + sw, H * s], fill=255)       # torso
+    d.rectangle([x - 44 * u, hy + 60 * u, x + 44 * u, hy + 220 * u], fill=255)  # neck
+    d.ellipse([x - hw, hy - hh, x + hw, hy + hh], fill=255)             # head
+    style = (seat - 1) % 4
+    if style == 0:      # short hair, fuller on top
+        d.ellipse([x - hw - 10 * u, hy - hh - 16 * u, x + hw + 10 * u, hy + 8 * u], fill=255)
+    elif style == 1:    # bun
+        d.ellipse([x - 50 * u, hy - hh - 70 * u, x + 50 * u, hy - hh + 24 * u], fill=255)
+    elif style == 2:    # long hair, falling either side of the neck
+        d.ellipse([x - hw - 14 * u, hy - hh - 14 * u, x + hw + 14 * u, hy + 30 * u], fill=255)
+        for sx in (-1, 1):
+            x0, x1 = sorted((x + sx * (hw + 26 * u), x + sx * (hw - 24 * u)))
+            d.rounded_rectangle([x0, hy - 40 * u, x1, hy + 235 * u], radius=int(24 * u), fill=255)
+    else:               # ponytail
+        d.ellipse([x - hw - 6 * u, hy - hh - 10 * u, x + hw + 6 * u, hy + 4 * u], fill=255)
+        d.ellipse([x + hw - 34 * u, hy - 30 * u, x + hw + 58 * u, hy + 150 * u], fill=255)
+    return m.resize((W, H), Image.LANCZOS)
+
+
+def draw_eye_mask(d, cx=W / 2, scale=1.0, top=0.0):
+    """The sleep mask players wear at night."""
+    hy = 0.37 * H + top
+    d.rounded_rectangle([cx - 100 * scale, hy - 30 * scale, cx + 100 * scale, hy + 16 * scale],
+                        radius=int(18 * scale), fill=(214, 210, 222))
+
+
+def draw_stage(img, label, seat, eye_mask=False):
+    """The speaking shot: seat's player as a backlit silhouette at the desk,
+    with the seat's name plate and a microphone (eye_mask: at night)."""
+    img.paste(SILHOUETTE, mask=person_mask(seat))
+    d = ImageDraw.Draw(img)
+    if eye_mask:
+        draw_eye_mask(d)
+    d.line([(W * 0.5 + 118, H * 0.80), (W * 0.5 + 80, H * 0.52)], fill=(128, 126, 138), width=8)   # mic
+    d.ellipse([W * 0.5 + 58, H * 0.465, W * 0.5 + 102, H * 0.535], fill=(84, 82, 94), outline=(156, 154, 166), width=3)
+    d.rounded_rectangle([W * 0.24, H * 0.78, W * 0.76, H * 0.95], radius=18, fill=(52, 46, 58))     # desk
+    d.line([(W * 0.24 + 18, H * 0.78), (W * 0.76 - 18, H * 0.78)], fill=(104, 94, 108), width=5)
+    y = H * 0.865                                                        # name plate
+    d.rounded_rectangle([W * 0.5 - 170, y - 38, W * 0.5 + 170, y + 38], radius=14, fill=(244, 238, 226),
+                        outline=(120, 96, 60), width=3)
+    d.ellipse([W * 0.5 - 158, y - 28, W * 0.5 - 102, y + 28], fill=(230, 200, 90), outline=(120, 90, 20), width=2)
+    d.text((W * 0.5 - 130, y), str(seat), fill=(40, 30, 10), font=font(30), anchor="mm")
+    d.text((W * 0.5 + 34, y), NAMES[seat - 1], fill=(50, 40, 30), font=font(44), anchor="mm")
     d.rounded_rectangle([W * 0.40, H * 0.015, W * 0.60, H * 0.075], radius=14, fill=(52, 48, 70), outline=(150, 140, 180), width=2)
     d.text((W * 0.50, H * 0.045), "DEMO CUP · 演示赛", fill=(235, 230, 220), font=font(30), anchor="mm")
-    d.text((W * 0.30, H * 0.045), f"Day {day_no}", fill=(200, 196, 190), font=font(26), anchor="mm")
+    if label:
+        d.text((W * 0.30, H * 0.045), label, fill=(200, 196, 190), font=font(26), anchor="mm")
     d.text((W * 0.18, H * 0.965), "配置: 预女猎守", fill=(200, 196, 190), font=font(24), anchor="lm")
 
 
@@ -122,9 +201,9 @@ def closeup_frame():
     img = Image.new("RGB", (W, H), (196, 124, 112))
     d = ImageDraw.Draw(img)
     d.rectangle([0, int(H * 0.62), W, H], fill=(206, 130, 118))
-    for cx in (W * 0.3, W * 0.7):
-        d.ellipse([cx - 190, H * 0.5 - 190, cx + 190, H * 0.5 + 190], fill=(246, 236, 226), outline=(120, 60, 50), width=8)
-        d.text((cx, H * 0.5), "?", fill=(90, 50, 44), font=font(150), anchor="mm")
+    for seat, cx in ((1, W * 0.3), (8, W * 0.7)):                       # two wolves, awake
+        img.paste(SILHOUETTE, mask=person_mask(seat, cx=cx, scale=0.85, top=H * 0.06))
+    d = ImageDraw.Draw(img)
     d.rounded_rectangle([W * 0.32, H * 0.84, W * 0.68, H * 0.93], radius=16, fill=(250, 244, 236))
     d.text((W * 0.5, H * 0.885), "夜间讨论 · 画面已遮挡", fill=(80, 40, 36), font=font(40), anchor="mm")
     return np.asarray(img)
@@ -137,9 +216,9 @@ def studio_frame():
     d.rectangle([0, int(H * 0.70), W, H], fill=(28, 30, 46))
     d.rounded_rectangle([W * 0.18, H * 0.12, W * 0.82, H * 0.58], radius=24, fill=(66, 84, 128), outline=(150, 170, 220), width=6)
     d.text((W * 0.5, H * 0.35), "DEMO CUP 演播室", fill=(235, 238, 248), font=font(96), anchor="mm")
-    for cx in (W * 0.36, W * 0.64):                                     # two commentators
-        d.ellipse([cx - 80, H * 0.52, cx + 80, H * 0.70], fill=(222, 196, 170))
-        d.rounded_rectangle([cx - 150, H * 0.68, cx + 150, H * 0.98], radius=40, fill=(56, 60, 90))
+    for seat, cx in ((2, W * 0.36), (5, W * 0.64)):                     # two commentators
+        img.paste((18, 20, 34), mask=person_mask(seat, cx=cx, scale=0.6, top=H * 0.15))
+    d = ImageDraw.Draw(img)
     d.rounded_rectangle([W * 0.08, H * 0.80, W * 0.92, H * 0.86], radius=10, fill=(90, 70, 40))
     return np.asarray(img)
 
@@ -149,18 +228,23 @@ SEAT_COLORS = [(150, 90, 80), (80, 120, 150), (110, 140, 90), (150, 120, 70), (1
 
 
 def seat_closeup(seat):
-    """Card viewing: one player's close-up, holding a face-down role card,
-    with the seat's name plate on the table."""
+    """Card viewing: one player's close-up, a silhouette against the seat's
+    wall panels holding a face-down role card, with the seat's name plate on
+    the table."""
     img = Image.new("RGB", (W, H), tuple(int(c * 0.55) for c in SEAT_COLORS[seat - 1]))
     d = ImageDraw.Draw(img)
-    for k in range(6):                                                  # wall panels
+    # Light wall panels: the camera's pans from seat to seat are what the
+    # card detector measures, and a dark silhouette on dark panels barely
+    # changes a small grey thumbnail when panned (pans 5%, rejected; ~47% on
+    # these, against the 30% the detector needs)
+    for k in range(6):
         x0 = W * (0.02 + 0.165 * k)
-        d.rectangle([x0, H * 0.06, x0 + W * 0.14, H * 0.52], fill=tuple(int(c * 0.75) for c in SEAT_COLORS[(seat + k) % 12]))
-    d.ellipse([W * 0.38, H * 0.16, W * 0.62, H * 0.58], fill=(226, 200, 176), outline=(60, 50, 40), width=6)
-    d.text((W * 0.5, H * 0.37), NAMES[seat - 1][:2].upper(), fill=(70, 50, 40), font=font(120), anchor="mm")
-    d.rounded_rectangle([W * 0.30, H * 0.52, W * 0.70, H * 0.92], radius=60, fill=SEAT_COLORS[seat - 1])
+        d.rectangle([x0, H * 0.06, x0 + W * 0.14, H * 0.52], fill=tuple(int(c * 0.55 + 110) for c in SEAT_COLORS[(seat + k) % 12]))
+    img.paste(SILHOUETTE, mask=person_mask(seat, top=H * 0.02))
+    d = ImageDraw.Draw(img)
     d.rectangle([0, int(H * 0.78), W, H], fill=(92, 72, 58))            # table edge
-    d.rounded_rectangle([W * 0.55, H * 0.58, W * 0.66, H * 0.80], radius=12, fill=(40, 40, 60), outline=(230, 220, 190), width=5)
+    d.rounded_rectangle([W * 0.55, H * 0.58, W * 0.66, H * 0.80], radius=12, fill=(236, 230, 214), outline=(120, 60, 50), width=5)
+    d.rounded_rectangle([W * 0.565, H * 0.60, W * 0.645, H * 0.78], radius=8, outline=(176, 80, 64), width=4)
     d.rounded_rectangle([W * 0.40, H * 0.84, W * 0.60, H * 0.95], radius=14, fill=(246, 240, 228), outline=(80, 60, 40), width=3)
     d.text((W * 0.5, H * 0.895), f"{seat}  {NAMES[seat - 1]}", fill=(60, 44, 30), font=font(48), anchor="mm")
     return np.asarray(img)
@@ -195,6 +279,10 @@ def tint_night(frame, k=1.0):
 
 
 FADE = 3.0  # seconds the light (and the sidebar) take to change at each night boundary
+SPEECH = 6  # seconds each player speaks before the camera moves to the next
+# Around a night the camera stays on one player, so the light changes on a
+# still shot, which the detector reads as a day/night transition, not a cut
+HOLD = 8
 
 
 def render(game, out_dir):
@@ -202,27 +290,56 @@ def render(game, out_dir):
     closeups = game.get("closeups", [])
     notes = game.get("notes", {})
     revealed = game.get("revealed", {})
-    days = []
-    for day_no in (1, 2, 3):
-        img = Image.new("RGB", (W, H))
-        d = ImageDraw.Draw(img)
-        draw_stage(d, day_no)
-        draw_sidebar(d, "left", game["roles"], notes, revealed)
-        draw_sidebar(d, "right", game["roles"], notes, revealed)
-        days.append(np.asarray(img))
-    night_img = Image.new("RGB", (W, H))
-    draw_stage(ImageDraw.Draw(night_img), 0)
-    stage_only = np.asarray(night_img)
-    night_base = tint_night(stage_only)
+    stages, frames, night_bases = {}, {}, {}
+
+    def stage(seat, label=None, eye_mask=False):
+        """The speaking shot of seat's player, without the sidebar (cached)."""
+        key = (seat, label, eye_mask)
+        if key not in stages:
+            img = backdrop()
+            draw_stage(img, label, seat, eye_mask)
+            stages[key] = np.asarray(img)
+        return stages[key]
+
+    def day_frame(day_no, seat):
+        """The speaking shot with the sidebar (cached)."""
+        if (day_no, seat) not in frames:
+            img = Image.fromarray(stage(seat, f"Day {day_no}").copy())
+            d = ImageDraw.Draw(img)
+            draw_sidebar(d, "left", game["roles"], notes, revealed)
+            draw_sidebar(d, "right", game["roles"], notes, revealed)
+            frames[(day_no, seat)] = np.asarray(img)
+        return frames[(day_no, seat)]
+
+    def night_seat(s):
+        return int((s - HOLD) // SPEECH) % 12 + 1
+
+    def night_stage(s):
+        """The night starting at s: its player in an eye mask, no sidebar."""
+        return stage(night_seat(s), eye_mask=True)
+
+    def night_base(s):
+        if s not in night_bases:
+            night_bases[s] = tint_night(night_stage(s))
+        return night_bases[s]
+
+    def speaker(t):
+        """Who has the floor: the next player every SPEECH seconds, and one
+        player through each night and HOLD seconds either side of it."""
+        for s, e in nights:
+            if s - HOLD <= t < e + HOLD:
+                return night_seat(s)
+        return int(t // SPEECH) % 12 + 1
+
     closeup = closeup_frame()
     studio = game.get("studio")
     tour = game.get("tour")
     studio_img = studio_frame() if studio else None
     seat_imgs = [seat_closeup(n) for n in range(1, 13)] if tour else None
 
-    def blend(day_frame, k):
+    def blend(day_frame, night_frame, k):
         """k=0 full day (sidebar on, white light) .. k=1 full night (sidebar gone, red light)."""
-        mix = (day_frame.astype(np.float32) * (1 - k) + stage_only.astype(np.float32) * k).astype(np.uint8)
+        mix = (day_frame.astype(np.float32) * (1 - k) + night_frame.astype(np.float32) * k).astype(np.uint8)
         return tint_night(mix, k)
 
     vid_dir = os.path.join(out_dir, game["id"])
@@ -242,13 +359,13 @@ def render(game, out_dir):
         elif tour and tour[0] <= t < tour[1]:
             img = Image.fromarray(tour_frame(seat_imgs, t, *tour))
         elif fading and fading[0] == nights[0][0] and t < fading[0] + FADE and tour:
-            # the tour cuts straight to the table as the first night falls
-            img = Image.fromarray(tint_night(stage_only, (t - fading[0]) / FADE))
+            # the tour cuts straight to the night shot as the first night falls
+            img = Image.fromarray(tint_night(night_stage(fading[0]), (t - fading[0]) / FADE))
             banner_night(img)
         elif fading and not any(s <= t < e for s, e in closeups):
             s, e = fading
             k = (t - s) / FADE if t < s + FADE else 1 - (t - e) / FADE
-            img = Image.fromarray(blend(days[min(day_no if t >= e else day_no, 3) - 1], k))
+            img = Image.fromarray(blend(day_frame(day_no, speaker(t)), night_stage(s), k))
             if t < s + 5 and t >= s:
                 banner_night(img)
             if e <= t < e + 5:
@@ -257,16 +374,13 @@ def render(game, out_dir):
             if any(s <= t < e for s, e in closeups):
                 frame = closeup
             else:
-                frame = night_base
+                frame = night_base(night[0])
             img = Image.fromarray(frame.copy())
             if t < night[0] + 5:
                 banner_night(img)
         else:
-            img = Image.fromarray(days[min(day_no, 3) - 1].copy())
+            img = Image.fromarray(day_frame(day_no, speaker(t)).copy())
             d = ImageDraw.Draw(img)
-            a = 2 * np.pi * (int(t // 5) % 12) / 12          # speaker ring moves every 5s
-            cx, cy = W * 0.50 + np.cos(a) * W * 0.23, H * 0.64 + np.sin(a) * H * 0.29
-            d.ellipse([cx - 34, cy - 34, cx + 34, cy + 34], outline=(255, 215, 90), width=5)
             d.text((W * 0.70, H * 0.045), f"{int(t) // 60:02d}:{int(t) % 60:02d}", fill=(200, 196, 190), font=font(26), anchor="mm")
             dawn = next((e for s, e in nights if e <= t < e + 5), None)
             if dawn is not None:

@@ -152,7 +152,7 @@ The YouTube channel searched by default is set by `CHANNEL_URL` in `web/vite.con
 
 ### Demo mode
 
-To try the viewer without downloading anything, render the synthetic games and run a server against a scratch library. The games look like a broadcast's speaking shot: the player who has the floor is a backlit silhouette at a desk with a seat name plate, and the role sidebar runs down both sides.
+To try the viewer without downloading anything, render the synthetic games and run a server against a scratch library. The games look like a broadcast's speaking shot: the player who has the floor is a simple backlit person icon at a desk with a seat name plate, and the role sidebar runs down both sides.
 
 ```bash
 source processing/venv/bin/activate

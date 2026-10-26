@@ -629,18 +629,19 @@ The user watches games on the server while development goes on, so there are two
   天黑请闭眼 / 天亮请睁眼 banners. One game is a hidden-roles broadcast (未知 ribbons). Since 2026-10-26
   (user request: "a silhouette of a person in the middle, like what happen when people are talking
   in actual 大师赛") the middle is a broadcast's speaking shot, not a drawn table: the player with the
-  floor as a backlit silhouette at a desk with a seat name plate and a mic (`person_mask`: four
-  hairstyles, build varies by seat), the next speaker every SPEECH = 6 s (same backdrop, so a change is
-  a small frame difference, not a cut). Around each night (HOLD = 8 s either side) the camera stays
-  on one player, who wears an eye mask under the red light, so the light changes on a still shot as
-  the detector expects. The tour close-ups, the commentators and the wolves' close-up are silhouettes
-  too. The tour puts its silhouettes on LIGHT wall panels: the card detector measures the pans on
-  32x18 grey thumbnails, and a dark silhouette on the old dark panels made a pan step change the
-  thumbnail by at most ~24.7 (< CARD_CUT 25): pans 5%, tour rejected; light panels give pans ~47%,
-  moving ~46% (old design 37% / 42%). Check a renderer change with the e2e suites (`--fresh`), which
-  assert the 看牌 tour. Game 1 (420 s) opens like a real broadcast: a still
-  studio shot (0-50 s), the card-viewing tour of the 12 seats (50-90 s, 1.6 s holds + eased pans) and
-  a cut to night 1 (90-160 s); night 2 is 280-330 s. Output: `processing/demo/library/<id>/video.mp4 +
+  floor at a desk with a seat name plate and a mic, drawn as a simple backlit person icon (`person_mask`:
+  a round head floating over a rounded body, no neck, the same for everyone; a first, more detailed
+  silhouette with hairstyles read as uncanny, user feedback), the next speaker every SPEECH = 6 s
+  (same backdrop, so a change is a small frame difference, not a cut). Around each night (HOLD = 8 s
+  either side) the camera stays on one player, who wears an eye mask under the red light, so the
+  light changes on a still shot as the detector expects. The tour close-ups, the commentators and the
+  wolves' close-up use the same icon. The tour puts its figures on LIGHT wall panels: the card
+  detector measures the pans on 32x18 grey thumbnails, and a dark figure on the old dark panels made a
+  pan step change the thumbnail by at most ~24.7 (< CARD_CUT 25): pans 5%, tour rejected; light panels
+  give pans ~47%, moving ~46% (old design 37% / 42%). Check a renderer change with the e2e suites
+  (`--fresh`), which assert the 看牌 tour. Game 1 (420 s) opens like a real broadcast: a still studio
+  shot (0-50 s), the card-viewing tour of the 12 seats (50-90 s, 1.6 s holds + eased pans) and a cut
+  to night 1 (90-160 s); night 2 is 280-330 s. Output: `processing/demo/library/<id>/video.mp4 +
   info.json` and `catalogue.json` (gitignored)
 - `tests/e2e/readme_screenshots.py [NAME ...]` retakes the README screenshots (overview, night,
   mask-roles-mode, reveal-role, reveal-seat, hidden-roles, edit-menu, jobs) on throwaway demo

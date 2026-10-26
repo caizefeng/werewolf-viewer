@@ -4,15 +4,15 @@
 Nothing here comes from a real stream: the stage, the player cards, the
 role ribbons, the night tint and the phase banners are all drawn, with
 made-up players. Like a broadcast's speaking shot, the middle of the frame
-shows the player who has the floor, as a backlit silhouette at a desk with
-a seat name plate; the speaker changes every few seconds, and at night the
-camera stays on one player, who wears an eye mask under the red light.
-The layout follows what the analysis expects (role
-ribbons at x~0.10 / x~0.89, rows pitched 0.16 from y=0.125, number badges
-outward of the ribbons, sidebar hidden at night, "天黑请闭眼" / "天亮请睁眼"
-banners), so the real pipeline can analyse these clips end to end. Game 1
-also opens like a real broadcast: a still studio shot, then the card-viewing
-tour (看牌) of the twelve seats, cut straight to the first night.
+shows the player who has the floor, as a simple backlit person icon (round
+head over a rounded body) at a desk with a seat name plate; the speaker
+changes every few seconds, and at night the camera stays on one player, who
+wears an eye mask under the red light. The layout follows what the analysis
+expects (role ribbons at x~0.10 / x~0.89, rows pitched 0.16 from y=0.125,
+number badges outward of the ribbons, sidebar hidden at night, "天黑请闭眼" /
+"天亮请睁眼" banners), so the real pipeline can analyse these clips end to
+end. Game 1 also opens like a real broadcast: a still studio shot, then the
+card-viewing tour (看牌) of the twelve seats, cut straight to the first night.
 
 Usage: make_demo_video.py OUT_DIR            # writes OUT_DIR/<id>/video.mp4 + info.json
 Needs ffmpeg on PATH and a CJK font (macOS: STHeiti).
@@ -83,50 +83,35 @@ def backdrop():
     return _BACKDROP[0].copy()
 
 
-def person_mask(seat, cx=W / 2, scale=1.0, top=0.0):
-    """'L' mask of a seated player seen from the front, as a silhouette:
-    head, neck, shoulders, and a hairstyle and build that vary by seat.
+HEAD_Y, HEAD_R = 0.36 * H, 104   # the person icon's head: centre (frame y) and radius at scale 1
+
+
+def person_mask(cx=W / 2, scale=1.0, top=0.0):
+    """'L' mask of a player as a simple person icon: a round head floating
+    over a rounded body, the same for everyone (the name plate says who).
     Drawn at twice the size and scaled down for smooth edges."""
     s = 2
     m = Image.new("L", (W * s, H * s), 0)
     d = ImageDraw.Draw(m)
-    x = cx * s
-    build = 1 + 0.06 * ((seat * 5) % 4 - 1.5) / 1.5                    # shoulders +-6%
-    u = scale * s
-    hy = (0.37 * H + top) * s                                            # head centre
-    hw, hh = 90 * u * (0.96 + 0.03 * (seat % 3)), 116 * u
-    sw = 320 * u * build
-    d.ellipse([x - sw, hy + 175 * u, x + sw, hy + 520 * u], fill=255)  # shoulders
-    d.rectangle([x - sw, hy + 340 * u, x + sw, H * s], fill=255)       # torso
-    d.rectangle([x - 44 * u, hy + 60 * u, x + 44 * u, hy + 220 * u], fill=255)  # neck
-    d.ellipse([x - hw, hy - hh, x + hw, hy + hh], fill=255)             # head
-    style = (seat - 1) % 4
-    if style == 0:      # short hair, fuller on top
-        d.ellipse([x - hw - 10 * u, hy - hh - 16 * u, x + hw + 10 * u, hy + 8 * u], fill=255)
-    elif style == 1:    # bun
-        d.ellipse([x - 50 * u, hy - hh - 70 * u, x + 50 * u, hy - hh + 24 * u], fill=255)
-    elif style == 2:    # long hair, falling either side of the neck
-        d.ellipse([x - hw - 14 * u, hy - hh - 14 * u, x + hw + 14 * u, hy + 30 * u], fill=255)
-        for sx in (-1, 1):
-            x0, x1 = sorted((x + sx * (hw + 26 * u), x + sx * (hw - 24 * u)))
-            d.rounded_rectangle([x0, hy - 40 * u, x1, hy + 235 * u], radius=int(24 * u), fill=255)
-    else:               # ponytail
-        d.ellipse([x - hw - 6 * u, hy - hh - 10 * u, x + hw + 6 * u, hy + 4 * u], fill=255)
-        d.ellipse([x + hw - 34 * u, hy - 30 * u, x + hw + 58 * u, hy + 150 * u], fill=255)
+    x, u = cx * s, scale * s
+    hy, r = (HEAD_Y + top) * s, HEAD_R * u
+    d.ellipse([x - r, hy - r, x + r, hy + r], fill=255)                 # head
+    y0 = hy + r + 28 * u                                                 # body, a gap below the head
+    d.rounded_rectangle([x - 290 * u, y0, x + 290 * u, y0 + 760 * u], radius=int(260 * u), fill=255)
     return m.resize((W, H), Image.LANCZOS)
 
 
 def draw_eye_mask(d, cx=W / 2, scale=1.0, top=0.0):
-    """The sleep mask players wear at night."""
-    hy = 0.37 * H + top
-    d.rounded_rectangle([cx - 100 * scale, hy - 30 * scale, cx + 100 * scale, hy + 16 * scale],
-                        radius=int(18 * scale), fill=(214, 210, 222))
+    """The sleep mask players wear at night: a band across the head."""
+    hy, r = HEAD_Y + top, HEAD_R * scale
+    d.rounded_rectangle([cx - r - 8 * scale, hy - 24 * scale, cx + r + 8 * scale, hy + 20 * scale],
+                        radius=int(16 * scale), fill=(214, 210, 222))
 
 
 def draw_stage(img, label, seat, eye_mask=False):
-    """The speaking shot: seat's player as a backlit silhouette at the desk,
+    """The speaking shot: seat's player as a backlit person icon at the desk,
     with the seat's name plate and a microphone (eye_mask: at night)."""
-    img.paste(SILHOUETTE, mask=person_mask(seat))
+    img.paste(SILHOUETTE, mask=person_mask())
     d = ImageDraw.Draw(img)
     if eye_mask:
         draw_eye_mask(d)
@@ -201,8 +186,8 @@ def closeup_frame():
     img = Image.new("RGB", (W, H), (196, 124, 112))
     d = ImageDraw.Draw(img)
     d.rectangle([0, int(H * 0.62), W, H], fill=(206, 130, 118))
-    for seat, cx in ((1, W * 0.3), (8, W * 0.7)):                       # two wolves, awake
-        img.paste(SILHOUETTE, mask=person_mask(seat, cx=cx, scale=0.85, top=H * 0.06))
+    for cx in (W * 0.3, W * 0.7):                                       # two wolves, awake
+        img.paste(SILHOUETTE, mask=person_mask(cx=cx, scale=0.85, top=H * 0.06))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([W * 0.32, H * 0.84, W * 0.68, H * 0.93], radius=16, fill=(250, 244, 236))
     d.text((W * 0.5, H * 0.885), "夜间讨论 · 画面已遮挡", fill=(80, 40, 36), font=font(40), anchor="mm")
@@ -216,8 +201,8 @@ def studio_frame():
     d.rectangle([0, int(H * 0.70), W, H], fill=(28, 30, 46))
     d.rounded_rectangle([W * 0.18, H * 0.12, W * 0.82, H * 0.58], radius=24, fill=(66, 84, 128), outline=(150, 170, 220), width=6)
     d.text((W * 0.5, H * 0.35), "DEMO CUP 演播室", fill=(235, 238, 248), font=font(96), anchor="mm")
-    for seat, cx in ((2, W * 0.36), (5, W * 0.64)):                     # two commentators
-        img.paste((18, 20, 34), mask=person_mask(seat, cx=cx, scale=0.6, top=H * 0.15))
+    for cx in (W * 0.36, W * 0.64):                                     # two commentators
+        img.paste((18, 20, 34), mask=person_mask(cx=cx, scale=0.6, top=H * 0.15))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([W * 0.08, H * 0.80, W * 0.92, H * 0.86], radius=10, fill=(90, 70, 40))
     return np.asarray(img)
@@ -228,19 +213,19 @@ SEAT_COLORS = [(150, 90, 80), (80, 120, 150), (110, 140, 90), (150, 120, 70), (1
 
 
 def seat_closeup(seat):
-    """Card viewing: one player's close-up, a silhouette against the seat's
+    """Card viewing: one player's close-up, a person icon against the seat's
     wall panels holding a face-down role card, with the seat's name plate on
     the table."""
     img = Image.new("RGB", (W, H), tuple(int(c * 0.55) for c in SEAT_COLORS[seat - 1]))
     d = ImageDraw.Draw(img)
     # Light wall panels: the camera's pans from seat to seat are what the
-    # card detector measures, and a dark silhouette on dark panels barely
+    # card detector measures, and a dark figure on dark panels barely
     # changes a small grey thumbnail when panned (pans 5%, rejected; ~47% on
     # these, against the 30% the detector needs)
     for k in range(6):
         x0 = W * (0.02 + 0.165 * k)
         d.rectangle([x0, H * 0.06, x0 + W * 0.14, H * 0.52], fill=tuple(int(c * 0.55 + 110) for c in SEAT_COLORS[(seat + k) % 12]))
-    img.paste(SILHOUETTE, mask=person_mask(seat, top=H * 0.02))
+    img.paste(SILHOUETTE, mask=person_mask(top=H * 0.02))
     d = ImageDraw.Draw(img)
     d.rectangle([0, int(H * 0.78), W, H], fill=(92, 72, 58))            # table edge
     d.rounded_rectangle([W * 0.55, H * 0.58, W * 0.66, H * 0.80], radius=12, fill=(236, 230, 214), outline=(120, 60, 50), width=5)

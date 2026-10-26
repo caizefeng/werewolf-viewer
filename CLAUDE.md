@@ -26,12 +26,14 @@ werewolf_viewer/
 │   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs (threaded)
 │   ├── analyze_cards.py   # Card-viewing (看牌) tour detection from camera motion
 │   ├── analyze_names.py   # Role name detection via PaddleOCR (lazy frame sampling)
-│   ├── models/            # Local PaddleOCR model weights (gitignored, ~165MB)
-│   │   ├── PP-OCRv5_server_det/  # Text detection model
-│   │   └── PP-OCRv5_server_rec/  # Text recognition model (Chinese)
+│   ├── models/            # Local PaddleOCR model weights (gitignored, fetched on first use)
+│   │   ├── PP-OCRv6_medium_det/  # Text detection model (in use, ~59MB)
+│   │   ├── PP-OCRv6_medium_rec/  # Text recognition model (in use, ~73MB)
+│   │   └── PP-OCRv5_server_*/    # Previous models, only benchmark_ocr.py uses them (~165MB)
 │   ├── benchmarks/        # Performance benchmarks (tracked; the dir is in .gitignore, so new files need git add -f)
 │   │   ├── benchmark.py       # Parallel vs sequential + ground truth validation
 │   │   ├── benchmark_full.py  # Night + name + full pipeline profiling
+│   │   ├── benchmark_hardware.py  # Full-analysis time + peak memory on this machine (README "Processing time")
 │   │   └── benchmark_ocr.py   # OCR model configuration benchmark (server vs mobile)
 │   └── download.py        # YouTube video downloader via yt-dlp
 ├── videos/                # Downloaded videos + metadata (not in git)
@@ -267,7 +269,18 @@ The user watches games on the server while development goes on, so there are two
   break a chain. Boundaries stay red-light based (refined), never extended by evidence
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases. Phases assembled from >= 3 bursts are exempt (a real night whose outer bursts begin/end on cuts)
 - Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_CUT_MERGE_GAP=180`, `MAX_EVIDENCE_GAP=240`, `MAX_EVIDENCE_GAP_NO_BANNERS=120`, `MIN_EVIDENCE_FRAGMENT=6`, `BANNER_MIN_GAP=20`, `DAWN_BANNER_WINDOW=24`, `NIGHT_BANNER_LEAD=12`, `NIGHT_BANNER_LAG=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
-- Performance: the corner scan itself is ~40s per hour of 720p video with 3 threads (~1min sequential; GPU decoding via VideoToolbox is slower due to GPU→CPU transfer overhead). The lazy OCR evidence checks (banners every 3s in short windows, sidebar every 10s inside candidate gaps) add roughly 1-4 minutes on videos whose bursts have 20-240s gaps; a full run measured 2-6 min per 40-150 min video on this 10-core CPU under concurrent load (gt_check 2026-10-15)
+- Performance (2026-10-26, `benchmarks/benchmark_hardware.py` on this Mac mini: Apple M4, 4 performance +
+  6 efficiency cores, 16 GB; every library video is 1080p60 AV1, ~1.45 GB per hour, decoded in
+  software by OpenCV): the corner scan decodes every frame, ~2 min per hour of video with 3 threads
+  (it was ~40 s per hour on 720p video; GPU decoding via VideoToolbox was slower due to GPU→CPU
+  transfer overhead). The card search adds ~15 s and the lazy OCR evidence checks (banners every 3s
+  in short windows, sidebar every 10s inside candidate gaps) 0-1.6 min (a hidden-roles game has few
+  candidates); the role-OCR subprocess runs 3-6 min alongside. Full analysis 3.1-6.7 min for 45-148
+  min games, 5.4-7.6 cores busy on average, peak RSS ~2.9 GB (main 1.2-1.3 GB + OCR child 1.6-1.7
+  GB). Two at once (the server's default slots): 7.4 + 7.9 min against 3.7 + 5.4 alone, only ~14%
+  more throughput, 5.6 GB together. Efficiency cores only (`taskpolicy -c background`): 2.0x as long.
+  A 1.08 GB download took 43 s (~27 MiB/s). The README's Requirements section quotes these numbers;
+  re-measure after changes that move them (a macOS daemon, audiomxd, held one core throughout)
 
 ### Card Viewing (看牌) Detection (analyze_cards.py, since 2026-10-25)
 - What it is: after the pre-game (commentators, player introductions) the director tours the twelve
@@ -542,8 +555,9 @@ The user watches games on the server while development goes on, so there are two
 - **Several jobs at once** (since 2026-10-15): every search row has its own Download/Stop button and
   progress bars, and ↻ re-analyze can run on several library rows. The server keeps a job per video
   (one job per video at a time) and a FIFO queue with separate slot limits: `MAX_DOWNLOADS=3`
-  (network-bound) and `MAX_ANALYSES=2` (each analysis is ~4-5 cores: 3 scan threads + an OCR
-  subprocess); override with env `WEREWOLF_MAX_DOWNLOADS` / `WEREWOLF_MAX_ANALYSES` before
+  (network-bound) and `MAX_ANALYSES=2` (each analysis keeps 5-8 cores busy and peaks near 3 GB: 3 scan
+  threads + an OCR subprocess; on this 10-core M4 two side by side give only ~14% more throughput than
+  one after the other, see Performance above); override with env `WEREWOLF_MAX_DOWNLOADS` / `WEREWOLF_MAX_ANALYSES` before
   `scripts/start.sh`. Phases: download jobs go queued → downloading → waiting → processing → done,
   analyze jobs start at waiting; rows show "queued #n" while a job waits for a slot. The front end
   runs ONE poller (`pollJobs`, 2s) for all jobs and stops it when none is active; a library row

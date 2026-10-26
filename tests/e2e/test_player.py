@@ -1,8 +1,8 @@
 """Regression walk of the core player on the demo games: library grouping,
 masks and mask modes, per-seat frames, the role panel (pack wolves, seat and
 role modes), the card viewing (看牌) marker and jump, night overlay and
-auto-mute, night jumps, mute, edit persistence, fullscreen mask fit and the
-hidden-roles behaviour."""
+auto-mute, night jumps, mute, edit persistence, fullscreen mask fit, the play
+button across a game switch and the hidden-roles behaviour."""
 import json
 
 from harness import (G1, G2, G3, DEMO_IDS, active_id, api, ctl, current_time, open_app, open_panel, park_mouse,
@@ -204,10 +204,21 @@ def run(base, run_dir, C, browser):
     pg.evaluate("document.exitFullscreen()")
     pg.wait_for_timeout(1200)
 
+    play_state = ("(() => ({paused: document.getElementById('video').paused,"
+                  " icon: document.getElementById('play-btn').innerHTML}))()")
+    pg.evaluate("document.getElementById('video').play()")
+    pg.wait_for_timeout(800)
+    playing = pg.evaluate(play_state)
     pg.click(f'#video-list li[data-id="{G2}"]')
     pg.wait_for_timeout(2500)
+    opened = pg.evaluate(play_state)
+    C.check("a game opened while another plays is paused and shows the play icon",
+            not playing["paused"] and opened["paused"] and "icon-play" in opened["icon"], f"{playing} -> {opened}")
     C.check("a hidden-roles game starts with masks off",
             pg.evaluate("document.getElementById('toggle-masks').textContent").startswith("Masks: Off"))
+    C.check("...and has no nights (the analysis writes none for it)",
+            api(base, f"/{G2}/metadata.json")[1]["night_phases"] == []
+            and pg.evaluate("document.querySelectorAll('.night-marker, .night-jump-group').length") == 0)
     pg.evaluate("document.getElementById('video').currentTime = 100")
     pg.wait_for_timeout(1500)
     C.check("...and no mask shows", pg.evaluate("[...document.querySelectorAll('.name-mask')].every(m => m.classList.contains('hidden'))"))

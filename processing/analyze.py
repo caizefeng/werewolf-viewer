@@ -126,8 +126,11 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
                     pass
         print()
 
-    # Write metadata
-    night_phases = phases["night_phases"]
+    # Write metadata. A hidden-roles broadcast gets no nights: the show keeps
+    # the audience blind itself, and a night would only black out and mute
+    # the commentators (user request 2026-10-26)
+    hidden_roles = bool(name_result.get("hidden_roles", False))
+    night_phases = [] if hidden_roles else phases["night_phases"]
     metadata = {
         "video_file": video_file,
         "night_phases": night_phases,
@@ -138,7 +141,7 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
         # True for hidden-roles broadcasts (the show keeps roles as 未知 and
         # reveals some as the game goes): the viewer turns masks/overlay
         # off and disables role reveal
-        "hidden_roles": bool(name_result.get("hidden_roles", False)),
+        "hidden_roles": hidden_roles,
     }
 
     metadata_path = os.path.join(video_dir, "metadata.json")
@@ -155,10 +158,11 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
     print("=" * 60)
     print(f"Analysis complete!")
     print(f"  Card viewings found: {len(phases['card_phases'])}")
-    print(f"  Night phases found: {len(night_phases)}")
+    print(f"  Night phases found: {len(phases['night_phases'])}"
+          + (" (not kept: hidden-roles broadcast)" if hidden_roles and phases["night_phases"] else ""))
     print(f"  Name mask regions: {len(name_result['name_masks'])}")
-    if name_result.get("hidden_roles"):
-        print("  Hidden-roles broadcast: yes (masks/role reveal disabled in viewer)")
+    if hidden_roles:
+        print("  Hidden-roles broadcast: yes (no nights; masks/role reveal disabled in viewer)")
     print(f"  Metadata saved to: {metadata_path}")
     print("=" * 60)
 

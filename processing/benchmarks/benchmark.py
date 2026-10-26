@@ -70,6 +70,15 @@ GROUND_TRUTH = {
     "CBZfebaxD0E": [   # S23E26 第四局 机械狼通灵师
         (487, 796), (3531, 3715), (4188, 4348),
     ],
+    # S22, every night checked on frames 2026-10-26. Both games have a short
+    # day lit purple (R/G ~1.6) on the table shot, which the ratio merge rule
+    # took for night close-ups and merged with the nights around it
+    "d3jNiPSqMuI": [   # S22E47 第一局 -- 30s day 28:27-28:57; the game ends on day 5 (final board 1:01:40)
+        (462, 709), (1544, 1706), (1737, 1846), (2292, 2389),
+    ],
+    "zla5T_T4UKQ": [   # S22E49 第三局 -- 23s day 27:15-27:38; the game ends on day 5 (final board 45:50)
+        (414, 678), (1215, 1453), (1495, 1634), (1658, 1815),
+    ],
 }
 
 # Card viewing (看牌) tours, every one checked on frames (2026-10-25): the shot
@@ -92,9 +101,9 @@ CARD_TOLERANCE = 3  # seconds (Xk65eicHSyw's tour starts ~2.5 s early: a split c
 # S22 first nights (start = 看牌 end, end = red light off or, in the hidden-
 # roles games, the cut from the commentators back to the table), checked on
 # frames 2026-10-25. Third value: seconds the detected end may overshoot.
+# (d3jNiPSqMuI and zla5T_T4UKQ moved to GROUND_TRUTH with all their nights.)
 FIRST_NIGHT_GT = {
-    "d3jNiPSqMuI": (462, 709, 0), "Dv0dRH80XGo": (441, 726, 0), "zHCN-nyQ9jA": (446, 689, 0),
-    "zla5T_T4UKQ": (414, 678, 0), "02bLRRi6RZk": (390, 653, 0),
+    "Dv0dRH80XGo": (441, 726, 0), "zHCN-nyQ9jA": (446, 689, 0), "02bLRRi6RZk": (390, 653, 0),
     "Im5713oy3b4": (516, 755, 0),    # hidden roles: commentators until 12:34
     "iDD3JgXWA-0": (549, 815, 0),    # hidden roles: table still red-lit 13:33-13:35
     "7SG4f3ZpZP0": (566, 829, 0),    # hidden roles: commentators until 13:49

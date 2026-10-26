@@ -206,7 +206,8 @@ The user watches games on the server while development goes on, so there are two
   red tablecloth: E47G1 7:13 instead of 7:43, E48G3, E49G2; E49G1's even started at 0:16) or up to
   90 s after it is pinned there; S21's red light comes on 2-7 s after the cut, which the older ground
   truth used. If no night starts within 90 s the first night was missed and is inserted:
-  - **hidden-roles broadcasts** show the table for 5-10 s, then cover the night with the
+  - **hidden-roles broadcasts** (whose nights analyze.py no longer writes, see "Hidden-roles
+    broadcasts" below; this stays benchmarked) show the table for 5-10 s, then cover the night with the
     commentators -- the very set shown just before the tour -- and cut back at dawn (S22E47 G2/G3,
     S22E48 G1). `_covered_night_end`: the pre-tour set (median 32x18 colour thumbnail of the scan
     samples 10-2 s before the tour) must return within COVER_WITHIN (30 s) of the tour and stay
@@ -233,7 +234,7 @@ The user watches games on the server while development goes on, so there are two
   [end, end+2s) for red-off — is re-scanned at `REFINE_STEP` (0.25s) by seeking once and decoding
   sequentially (`_scan_window`), so buffers apply to the actual light transition. Output times are
   floats (2 decimals). Buffers: `ENTRY_BUFFER=2.0` before red-on, `EXIT_BUFFER=1.0` after red-off
-- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, and the gap is at most MAX_CUT_MERGE_GAP=180s (the cut rule used to be unbounded; S23's cut-heavy editing chained a night to stray red flashes up to 45 minutes later, yielding 50-80 minute "nights" on S23E25), OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps. Either rule is vetoed for a gap of at least `BANNER_MIN_GAP=20`s when the phase banners show a day lay between (`gap_is_night(..., check_sidebar=False)`): an S23 self-destruct day can end on a cut-sized diff (61 at E26G3's dawn, the studio light jumps red→purple), so the cut rule alone is not safe there.
+- **merge_clusters**: merges adjacent red clusters when EITHER: (1) BOTH exit and entry boundaries are camera cuts (diff >= 40), using a 3-sample window around each boundary, and the gap is at most MAX_CUT_MERGE_GAP=180s (the cut rule used to be unbounded; S23's cut-heavy editing chained a night to stray red flashes up to 45 minutes later, yielding 50-80 minute "nights" on S23E25), OR (2) the gap is ≤100s and at least 60% of gap samples have R/G ≥ GAP_RED_THRESH (1.3) with no sample below GAP_MIN_FLOOR (1.05), indicating close-up shots during an ongoing night (close-up R/G ~1.5-2.1 vs daytime ~1.0-1.2), AND at least one of the two boundaries is a camera cut (window diff >= 40: the camera left the table). The fraction-based check tolerates occasional brief dips while the floor prevents merging across genuine daytime gaps. The cut condition was added 2026-10-26 (user report: S22E49 G3's nights 3 and 4 came out as one): S22 lights some short days PURPLE, R/G 1.55-1.6 on the table shot, which passes the ratio test, and when the camera stays on the table through dawn and dusk both boundaries are gradual -- the light going off and on again, i.e. a day. Of the 8 ratio joins in 31 games only those two had no cut at either end, and both were such days (S22E49 G3 27:15-27:38, S22E47 G1 28:27-28:57); the other six (S21 F2J0QK_3gUo x2, Jnf_dLaVNMU, WkVPdddUiio; S23 3oifxz_xLr4, 40RdPP2AuMs) are a dimmer red table inside a ground-truth night, each with a cut at one end. Either rule is vetoed for a gap of at least `BANNER_MIN_GAP=20`s when the phase banners show a day lay between (`gap_is_night(..., check_sidebar=False)`): an S23 self-destruct day can end on a cut-sized diff (61 at E26G3's dawn, the studio light jumps red→purple), so the cut rule alone is not safe there.
 - **merge_by_day_evidence** (second pass, S23+): newer seasons cut away from the red table for
   over a minute at a time during a night (the wolves' masked close-ups, the night graphic), so a
   night arrives as 14-60s red bursts that neither rule above reconnects, and each burst then dies
@@ -437,6 +438,11 @@ The user watches games on the server while development goes on, so there are two
   (toggle still works as an override), badges the video in the library, and the role panel
   shows an explanation instead of rows. Titles don't mark these games; detection is purely from
   the sidebar labels, confirmed on S23E24 G2/G3 and S23E25 G3
+- **No nights for hidden-roles broadcasts** (analyze.py, user request 2026-10-26: "For hidden role
+  games no night phase is needed at all"): the night detector still runs (its 看牌 tours are kept,
+  and its hidden-roles first nights stay in FIRST_NIGHT_GT), but metadata.json gets
+  `night_phases: []` -- a night there only added markers, the Night chip and, with masks forced on,
+  a blackout and mute over the commentators. `--keep-edits` still keeps nights a user added
 - Raw OCR goes through ocr_items_in_frame (edge_ratio 0.30) -> _roles_from_items;
   detect_names_in_frame is a thin wrapper. analyze_name_regions_full() returns {name_masks,
   role_map, hidden_roles} (what analyze.py writes); analyze_name_regions() still returns masks only
@@ -504,7 +510,11 @@ The user watches games on the server while development goes on, so there are two
   sets `word-break: break-all` for long titles; episode headers override it with `white-space:
   nowrap` (only the date may ellipsize) -- without that, adding the "★n" count split "S01E01", the
   date and "2 games" mid-word in the 260px sidebar. The bookmark suite asserts one-line headers and
-  info bar at 1600 and 1366 wide
+  info bar at 1600 and 1366 wide. (5) `load()` on a media element (switchVideo's reset, a new src)
+  sets `paused` WITHOUT firing "pause", and drops the "pause" a `pause()` just before it had queued
+  (HTML spec: the load algorithm removes pending media-element tasks): opening another game while
+  one played left the pause icon over the paused game (user report 2026-10-26). The play button
+  also redraws on "emptied" and "loadstart"
 - **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
   metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
   outward to its frame edge (`_renderedBox`), hiding player avatars/names too; only the inner
@@ -602,7 +612,7 @@ The user watches games on the server while development goes on, so there are two
 - `player`: regression walk of the core viewer (library grouping, masks and modes, per-seat frames,
   role panel by role/seat with pack-wolf reveal, the 看牌 marker / panel row / jump / no masks or
   overlay during it, night overlay/auto-mute/jumps, mute, edit + reset persistence, fullscreen mask
-  fit, hidden-roles behaviour; 54 checks). `bookmarks`: the /api/state contract
+  fit, the play icon after a game switch, hidden-roles behaviour incl. no nights; 56 checks). `bookmarks`: the /api/state contract
   (validation, 403/413, merge, 30 concurrent writers, corrupt file) and the UI (row/info-bar/B-key
   stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
   saves, switch and tab-close saves, watched games, another device, touch, survival of
@@ -663,7 +673,7 @@ The user watches games on the server while development goes on, so there are two
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential). 2026-10-25, card-aware pipeline (one parallel run per game; scans cached in the session scratchpad and replayed with `analyze_phases(scan=...)`): GROUND_TRUTH 17/17, CARD_GROUND_TRUTH 28/28 games (31 tours), FIRST_NIGHT_GT 11/11 (S22 + two S23 hidden-roles games), and the night after every tour starts at its end 31/31. Threaded and sequential scans give identical arrays.
+All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential). 2026-10-25, card-aware pipeline (one parallel run per game; scans cached in the session scratchpad and replayed with `analyze_phases(scan=...)`): GROUND_TRUTH 17/17, CARD_GROUND_TRUTH 28/28 games (31 tours), FIRST_NIGHT_GT 11/11 (S22 + two S23 hidden-roles games), and the night after every tour starts at its end 31/31. Threaded and sequential scans give identical arrays. 2026-10-26 (ratio merge needs a cut): GROUND_TRUTH 19/19 (d3jNiPSqMuI and zla5T_T4UKQ moved there from FIRST_NIGHT_GT with all their nights), FIRST_NIGHT_GT 9/9, CARD_GROUND_TRUTH 28/28; the change alters no other game's merges (checked over all clusters of the 31 cached scans).
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05
@@ -726,7 +736,10 @@ they used to record (65R0r19JyYk 12:27, -ESYZWvQMH4 8:18, ZusP81Ycn-U 7:27, EC-1
 FIRST_NIGHT_GT for the S22 games below.
 
 ### S22 first nights (2026-10-25, checked on frames)
-- d3jNiPSqMuI (S22E47 第一局): 看牌 7:06-7:42, night 1 7:42-11:49 (was 7:13: red tablecloth in the tour)
+- d3jNiPSqMuI (S22E47 第一局): 看牌 7:06-7:42, night 1 7:42-11:49 (was 7:13: red tablecloth in the tour).
+  All nights (2026-10-26, in GROUND_TRUTH): 7:42-11:49, 25:44-28:26, 28:57-30:46, 38:12-39:49; the 30 s
+  day between nights 2 and 3 is lit purple on the table shot and was merged until 2026-10-26; the game
+  ends on day 5 (final board 1:01:40)
 - iDD3JgXWA-0 (S22E47 第二局, hidden roles): 看牌 8:29-9:09, night 1 9:09-13:35 (commentators
   9:14-13:32, then the table still red until 13:34); was not detected at all
 - 7SG4f3ZpZP0 (S22E47 第三局, hidden roles): 看牌 8:48-9:26, night 1 9:26-13:49 (commentators); was missing
@@ -738,7 +751,14 @@ FIRST_NIGHT_GT for the S22 games below.
 - Dv0dRH80XGo (S22E48 第三局): 看牌 6:40-7:21, night 1 7:21-12:06 (was 6:43)
 - zHCN-nyQ9jA (S22E49 第一局): 看牌 6:43-7:26, night 1 7:26-11:29 (was 0:16-11:29)
 - 02bLRRi6RZk (S22E49 第二局): 看牌 5:49-6:30, night 1 6:30-10:53 (was 6:21)
-- zla5T_T4UKQ (S22E49 第三局): 看牌 6:15-6:54, night 1 6:54-11:18
+- zla5T_T4UKQ (S22E49 第三局): 看牌 6:15-6:54, night 1 6:54-11:18. All nights (2026-10-26, in
+  GROUND_TRUTH): 6:54-11:18, 20:15-24:13, 24:55-27:14, 27:38-30:15; the 23 s day between nights 3 and
+  4 (players awake, purple light, no sidebar) was merged into one 24:52-30:16 night until 2026-10-26
+  (user report); the game ends on day 5 (final board 45:50)
+- Later nights of the other S22 games checked on frames 2026-10-26 (no hidden day inside): 9Yij3uRUp1M
+  51:31-56:49 (long cutaways are masked players and the wolves' split screen) and 1:00:35-1:03:15,
+  Dv0dRH80XGo, zHCN-nyQ9jA, 02bLRRi6RZk (its day 1 really runs 10:53-1:04:52, sidebar throughout) and
+  S22E50 G2 bmXW-4CxR7g (18:58-22:45, 23:14-28:04: a 29 s day between, already split)
 
 ### S23 test set (2026-10, ground truth generated by frame inspection)
 S23 broadcasts intercut nights with the wolves' masked close-ups and a night graphic, overlay a
@@ -774,6 +794,6 @@ entirely and second night split; E25G1/E25G2 one 13-50 minute "night" each.
   (abandoned at that dawn; the table stays red until 9:00), second deal 看牌 13:47-14:22, night 1
   14:22-18:13. Their LATER nights are still mostly missed: hidden-roles broadcasts cover every night
   with the commentators (2-5 min runs of the pre-tour set mid-game in S22E47 G2/G3, S22E48 G1), which
-  could find them the same way -- not done yet. The viewer disables the night overlay and masks for
-  hidden-roles videos anyway, so only the jump markers are affected. A normal game whose later night
-  had no red table shot at all would still be missed
+  could find them the same way -- not needed: since 2026-10-26 analyze.py writes no nights at all for
+  a hidden-roles broadcast. A normal game whose later night had no red table shot at all would still
+  be missed

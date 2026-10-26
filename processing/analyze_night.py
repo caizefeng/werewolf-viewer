@@ -333,7 +333,9 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH,
 
     Also merges when enough of the gap has elevated R/G ratios (≥ GAP_RED_THRESH),
     indicating the camera is on close-up shots during an ongoing night.
-    Close-up R/G (~1.5-2.1) is clearly above daytime (~1.0-1.2).
+    Close-up R/G (~1.5-2.1) is clearly above normal daylight (~1.0-1.2), but
+    not above S22's purple daylight (~1.6), so at least one boundary must be
+    a camera cut: two gradual boundaries are a day on the table shot.
     Uses a fraction-based check (GAP_ELEVATED_FRACTION) to tolerate occasional
     brief dips below threshold during close-ups, with a floor check (GAP_MIN_FLOOR)
     to reject gaps that contain genuine daytime samples (R/G < 1.05).
@@ -364,8 +366,14 @@ def merge_clusters(clusters, timestamps, ratios, diffs, cut_thresh=CUT_THRESH,
                 and gap_duration <= MAX_CUT_MERGE_GAP):
             join = True
 
-        # Gap with elevated R/G ratios → close-up shots during night
-        elif gap_duration <= MAX_MERGE_GAP and exit_idx < entry_idx:
+        # Gap with elevated R/G ratios → close-up shots during night. The
+        # camera must have left the table at one end at least: with both
+        # ends gradual the light went off and on again over the table, which
+        # is a day whatever its colour. S22 lights some short days purple
+        # (R/G ~1.6), and this rule merged nights across them (S22E47 G1
+        # 28:27-28:57, S22E49 G3 27:15-27:38)
+        elif (gap_duration <= MAX_MERGE_GAP and exit_idx < entry_idx
+              and max(exit_diff, entry_diff) >= cut_thresh):
             gap_ratios = ratios[exit_idx:entry_idx]
             if len(gap_ratios) > 0:
                 elevated_frac = np.mean(gap_ratios >= GAP_RED_THRESH)

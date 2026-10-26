@@ -98,6 +98,11 @@ export class WerewolfPlayer {
       this._showControls();
     });
     this.video.addEventListener("ended", () => this._updatePlayBtn());
+    // A load (switching games, or the reset before it) pauses the video
+    // without a "pause" event, and drops the one a pause() just before it
+    // queued: the button kept the pause icon over the paused next game
+    this.video.addEventListener("emptied", () => this._updatePlayBtn());
+    this.video.addEventListener("loadstart", () => this._updatePlayBtn());
     this.video.addEventListener("loadedmetadata", () => this._updateTime());
     this.video.addEventListener("progress", () => this._updateBuffered());
     this.video.addEventListener("volumechange", () => {

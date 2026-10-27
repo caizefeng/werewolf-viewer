@@ -2,7 +2,7 @@
 masks and mask modes, per-seat frames, the role panel (pack wolves, seat and
 role modes), the card viewing (看牌) marker and jump, night overlay and
 auto-mute, night jumps, mute, edit persistence, fullscreen mask fit, the play
-button across a game switch and the hidden-roles behaviour."""
+button and progress bar across a game switch and the hidden-roles behaviour."""
 import json
 
 from harness import (G1, G2, G3, DEMO_IDS, active_id, api, ctl, current_time, open_app, open_panel, park_mouse,
@@ -204,8 +204,10 @@ def run(base, run_dir, C, browser):
     pg.evaluate("document.exitFullscreen()")
     pg.wait_for_timeout(1200)
 
-    play_state = ("(() => ({paused: document.getElementById('video').paused,"
-                  " icon: document.getElementById('play-btn').innerHTML}))()")
+    play_state = ("(() => { const v = document.getElementById('video'), w = (id) => document.getElementById(id).getBoundingClientRect().width;"
+                  " return {paused: v.paused, icon: document.getElementById('play-btn').innerHTML, t: v.currentTime,"
+                  " played: Math.round(w('progress-played') / w('progress-bar') * 100),"
+                  " time: document.getElementById('time-display').textContent}; })()")
     pg.evaluate("document.getElementById('video').play()")
     pg.wait_for_timeout(800)
     playing = pg.evaluate(play_state)
@@ -214,6 +216,10 @@ def run(base, run_dir, C, browser):
     opened = pg.evaluate(play_state)
     C.check("a game opened while another plays is paused and shows the play icon",
             not playing["paused"] and opened["paused"] and "icon-play" in opened["icon"], f"{playing} -> {opened}")
+    # G2 has no resume point, so nothing seeks: the bar used to keep G1's place
+    C.check("...with the progress bar at its start, not the last game's place",
+            playing["played"] > 20 and opened["t"] == 0 and opened["played"] == 0 and opened["time"] == "0:00 / 3:00",
+            f"{playing} -> {opened}")
     C.check("a hidden-roles game starts with masks off",
             pg.evaluate("document.getElementById('toggle-masks').textContent").startswith("Masks: Off"))
     C.check("...and has no nights (the analysis writes none for it)",

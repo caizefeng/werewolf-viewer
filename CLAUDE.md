@@ -527,7 +527,11 @@ The user watches games on the server while development goes on, so there are two
   sets `paused` WITHOUT firing "pause", and drops the "pause" a `pause()` just before it had queued
   (HTML spec: the load algorithm removes pending media-element tasks): opening another game while
   one played left the pause icon over the paused game (user report 2026-10-26). The play button
-  also redraws on "emptied" and "loadstart"
+  also redraws on "emptied" and "loadstart". (6) The same load rewinds to 0 while `duration` is NaN,
+  so the timeupdate redraw (which needs a duration) left the progress bar alone, and a game opened
+  without a resume point never seeks: the played and buffered bars kept the previous game's place
+  until playback started (user report 2026-10-27). `_updateProgress` (time display + both bars,
+  empty while the duration is unknown) also runs on "emptied" and "loadedmetadata"
 - **Mask mode** (`Mask: Full` / `Mask: Roles` button, per-browser via localStorage, default Full):
   metadata.json always stores the OCR'd role-name box. Full mode renders each mask extended
   outward to its frame edge (`_renderedBox`), hiding player avatars/names too; only the inner
@@ -626,7 +630,8 @@ The user watches games on the server while development goes on, so there are two
 - `player`: regression walk of the core viewer (library grouping, masks and modes, per-seat frames,
   role panel by role/seat with pack-wolf reveal, the 看牌 marker / panel row / jump / no masks or
   overlay during it, night overlay/auto-mute/jumps, mute, edit + reset persistence, fullscreen mask
-  fit, the play icon after a game switch, hidden-roles behaviour incl. no nights; 56 checks). `bookmarks`: the /api/state contract
+  fit, the play icon and progress bar after a game switch, hidden-roles behaviour incl. no nights;
+  57 checks). `bookmarks`: the /api/state contract
   (validation, 403/413, merge, 30 concurrent writers, corrupt file) and the UI (row/info-bar/B-key
   stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
   saves, switch and tab-close saves, watched games, another device, touch, survival of

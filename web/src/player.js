@@ -103,7 +103,12 @@ export class WerewolfPlayer {
     // queued: the button kept the pause icon over the paused next game
     this.video.addEventListener("emptied", () => this._updatePlayBtn());
     this.video.addEventListener("loadstart", () => this._updatePlayBtn());
-    this.video.addEventListener("loadedmetadata", () => this._updateTime());
+    // It also rewinds to 0 while the duration is unknown, so the timeupdate
+    // redraw skips it, and a game without a resume point never seeks: the
+    // bar kept the previous game's position until playback (user report
+    // 2026-10-27)
+    this.video.addEventListener("emptied", () => this._updateProgress());
+    this.video.addEventListener("loadedmetadata", () => this._updateProgress());
     this.video.addEventListener("progress", () => this._updateBuffered());
     this.video.addEventListener("volumechange", () => {
       this.volumeSlider.value = this.video.muted ? 0 : this.video.volume;
@@ -906,12 +911,23 @@ export class WerewolfPlayer {
     this.isSeeking = false;
   }
 
-  // ── Custom controls: buffered ──
+  // ── Custom controls: progress bar ──
+
+  // Time display, played and buffered bars; both bars are empty while the
+  // duration is unknown (a load in progress)
+  _updateProgress() {
+    this._updateTime();
+    if (!this.isSeeking) {
+      const d = this.video.duration;
+      this.progressPlayed.style.width = d > 0 ? `${(this.video.currentTime / d) * 100}%` : "0%";
+    }
+    this._updateBuffered();
+  }
 
   _updateBuffered() {
-    if (!this.video.duration || this.video.buffered.length === 0) return;
-    const end = this.video.buffered.end(this.video.buffered.length - 1);
-    this.progressBuffered.style.width = `${(end / this.video.duration) * 100}%`;
+    const d = this.video.duration;
+    const b = this.video.buffered;
+    this.progressBuffered.style.width = d > 0 && b.length ? `${(b.end(b.length - 1) / d) * 100}%` : "0%";
   }
 
   // ── Fullscreen ──
@@ -992,10 +1008,7 @@ export class WerewolfPlayer {
     // Name masks only appear after the first night ends
     this._updateMaskVisibility(t);
 
-    this._updateTime();
-    if (!this.isSeeking && this.video.duration) {
-      this.progressPlayed.style.width = `${(t / this.video.duration) * 100}%`;
-    }
+    this._updateProgress();
   }
 
   _updateNightState() {

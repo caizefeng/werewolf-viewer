@@ -95,6 +95,10 @@ CARD_GROUND_TRUTH = {
     "pZ0vo8VRDkA": [(448, 485), (827, 863)], "bzsBWNpIwpo": [(624, 670)], "fgw-4eUV0JE": [(345, 381)],
     "HpIM5xTU-t8": [(377, 416)], "X5J6PIMh368": [(388, 427)], "3oifxz_xLr4": [(397, 435)],
     "40RdPP2AuMs": [(434, 472)], "CBZfebaxD0E": [(450, 487)],
+    # S23E28 (2026-10-27): a 2x2 split screen of the four table cameras instead
+    # of a tour, from the cut away from the commentators to the cut to the
+    # night's table (checked on frames)
+    "40WQgtMozXM": [(615, 639)], "VP2EVqrsWOE": [(469, 491)], "8myFCIe-Yeo": [(291, 314)],
 }
 CARD_TOLERANCE = 3  # seconds (Xk65eicHSyw's tour starts ~2.5 s early: a split commentators' shot)
 
@@ -115,6 +119,8 @@ FIRST_NIGHT_GT = {
     "HpIM5xTU-t8": (416, 710, 0),    # S23E25 第三局: commentators until 11:49
     "pZ0vo8VRDkA": (485, 540, 0),    # S23E24 第三局, first deal (abandoned at dawn, table red until 9:00);
                                      # the second deal's night 1 is 14:22-18:13
+    # S23E28: night 1 from the split screen's end to the red light going off
+    "40WQgtMozXM": (639, 890, 0), "VP2EVqrsWOE": (491, 768, 0), "8myFCIe-Yeo": (314, 569, 0),
 }
 
 TOLERANCE = 5  # seconds (ground truth approximate, buffer settings may differ)

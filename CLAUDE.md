@@ -24,7 +24,7 @@ werewolf_viewer/
 │   ├── requirements.txt   # Dependencies: yt-dlp, paddleocr, paddlepaddle, opencv-python
 │   ├── analyze.py         # Main pipeline: runs night + name analysis (parallel by default)
 │   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs (threaded)
-│   ├── analyze_cards.py   # Card-viewing (看牌) tour detection from camera motion
+│   ├── analyze_cards.py   # Card-viewing (看牌) detection: seat tour (camera motion) or 2x2 split screen
 │   ├── analyze_names.py   # Role name detection via PaddleOCR (lazy frame sampling)
 │   ├── models/            # Local PaddleOCR model weights (gitignored, fetched on first use)
 │   │   ├── PP-OCRv6_medium_det/  # Text detection model (in use, ~59MB)
@@ -285,8 +285,9 @@ The user watches games on the server while development goes on, so there are two
 ### Card Viewing (看牌) Detection (analyze_cards.py, since 2026-10-25)
 - What it is: after the pre-game (commentators, player introductions) the director tours the twelve
   seats in order (1 -> 12 or 12 -> 1) while each player checks their role card, then cuts to the
-  table wide shot as night 1 falls. Same in S21, S22 and S23, open and hidden-roles broadcasts alike;
-  35-55 s; nothing on screen labels it. A broadcast can deal twice before day 1 (re-deal):
+  table wide shot as night 1 falls. Same in S21, S22 and S23 up to E27, open and hidden-roles
+  broadcasts alike; 35-55 s; nothing on screen labels it. From S23E28 on the broadcast shows a split
+  screen instead (see "Split screen" below). A broadcast can deal twice before day 1 (re-deal):
   EC-1bimFjo4 (S21E05 G2, 6:48 and 15:06), pZ0vo8VRDkA (S23E24 G3, 7:28 and 13:47), QNxo5hmWLN0
   (S23E24 G2, 6:27 and 16:39 -- the first attempt was abandoned at dawn, commentators in between)
 - **Signal: camera motion.** The commentators, the introductions and the night table shot hold still;
@@ -295,7 +296,9 @@ The user watches games on the server while development goes on, so there are two
   camera drifts etc. move too, but slowly (pans 1-25% vs 24-63% for tours)
 - **Coarse** (`coarse_cores`, from the night scan's `motions`): runs of 2 s samples with motion >=
   CARD_COARSE (12), gaps <= CARD_BRIDGE (12 s, a held close-up), >= CARD_MIN_CORE (16 s), starting
-  before CARD_SEARCH_END (45 min)
+  before CARD_SEARCH_END (45 min). Until 2026-10-27 that limit held only until the first run started,
+  so a game with no tour had candidates fine-scanned all through it (up to CARD_MAX_SCANS, e.g. S23E28
+  G1 at 1:26:06); the three S23E28 analyses each spent ~1 min on that
 - **Fine** (`fine_scan` around each core +-60 s, widened once if the run reaches the window edge):
   samples every 0.5 s, each with a pair 0.25 s later (32x18 grey thumbs): `motion` (change over
   0.25 s), `change` (over 0.5 s; > CARD_CUT 25 = a cut or a pan step), corner redness, thumbs.
@@ -317,6 +320,35 @@ The user watches games on the server while development goes on, so there are two
   search ignores all red light before the first tour (a false tour on day 1 would erase night 1).
   The first accepted tour is 看牌; later candidates are only a re-deal: within CARD_REDEAL_WITHIN
   (15 min) and before the first day, where the search stops. At most CARD_MAX_SCANS (6) fine scans
+- **Split screen** (`find_grid`, user report 2026-10-27: "S23E28 didn't have 看牌 phases"): the three
+  S23E28 games show no tour; after the commentators they cut to a 2x2 grid of four fixed table
+  cameras, three seats each, for 21-24 s while all twelve players check their cards at once, then to
+  the night table (天黑请闭眼 over the grid's last 0.5 s). Nothing moves, so no coarse core covered it.
+  `find_card_phases` searches for it only when no tour is accepted, so tour games behave as before
+  - Coarse (`centre_lines`, on the scan's 32x18 colour thumbnails): the grid's seams lie exactly on
+    the frame's centre lines, which are thumbnail block edges (60 px at 1080p, 40 at 720p). Across the
+    horizontal one (top quadrants end on white tables, bottom ones start on dark walls) the card grids
+    score 2.4-6.8 (contrast across it over the lines beside it, the weaker half); other pictures
+    mostly < 1, single samples up to 4.2. The vertical one is weak at that scale (both top quadrants
+    are dark there). Runs >= GRID_COARSE (1.6) lasting >= GRID_MIN_CORE (10 s), one sample may miss
+    (`coarse_cores` on this score). At 1.6 only the three S23E28 grids pass the red-light rules below
+    across 34 cached games; at 1.4 four look-alikes would also need the seam check
+  - Verify (`grid_seams`, 3 full frames at 25/50/75% of the run, 2 must pass): each of the four half
+    seams' median step across the centre line over the median step 3-8 px beside it; the weakest >=
+    GRID_SEAM (3.0). Card grids 3.7-23 per frame (pixel-exact seams, no border), single pictures < 1,
+    three-panel layouts (one seam missing: S22E47 G1 9:28, S23E28 G1 night 1) <= 2.8
+  - Night shows use 2x2 grids too (the wolves: S21 F2J0QK_3gUo 12:22 and 29:46, S22 d3jNiPSqMuI
+    26:20), and they pass the seam check. So the search stops at the first run after red light held
+    >= GRID_NIGHT_RUN (6 s) (`night_before`: nothing before the card viewing is night; the S23 games
+    have no such red before it, S21/S22 pre-games had some, where the search would simply stop: a
+    missed card viewing, never a false one); it also needs red light within CARD_RED_WITHIN after the
+    grid (`red_after`) and rejects daytime (`day_seen`). Only the first grid is taken: no re-deal has
+    been seen in this format, and a later grid may be the wolves'
+  - Edges (`_grid_edge`): outward from the run's first/last sample at REFINE_STEP until a frame
+    scores < GRID_EDGE_SEAM (1.5); the cut is the middle of that step. Lower than GRID_SEAM because
+    the grid dims with the studio at nightfall (S23E28 G1: 2.75-3.8 for the last 1.2 s, which a 3.0
+    edge cut short). Checked 2026-10-27: the grid search alone (no tour search first) on all 31 cached
+    games with video finds exactly the three S23E28 grids, each within 0.4 s of the cuts on the frames
 - **Ground truth** (28 games, every tour checked on frames: the shot before is the commentators, the
   first/last tour shot a player close-up, the shot after the table; research features + simulation
   in the session scratchpad): S21 -ESYZWvQMH4 7:35-8:18, 65R0r19JyYk 11:44-12:27, EC-1bimFjo4
@@ -327,7 +359,10 @@ The user watches games on the server while development goes on, so there are two
   zHCN-nyQ9jA 6:43-7:26, 02bLRRi6RZk 5:49-6:30, zla5T_T4UKQ 6:15-6:54; S23 xNDz6SStaLo 8:37-9:17,
   QNxo5hmWLN0 6:27-7:03 + 16:39-17:20, pZ0vo8VRDkA 7:28-8:05 + 13:47-14:23, bzsBWNpIwpo 10:24-11:10,
   fgw-4eUV0JE 5:45-6:21, HpIM5xTU-t8 6:17-6:56, X5J6PIMh368 6:28-7:07, 3oifxz_xLr4 6:37-7:15,
-  40RdPP2AuMs 7:14-7:52, CBZfebaxD0E 7:30-8:07. 31/31 found, 0 false tours. Final run: every end within 0.25 s of the marked second, every start too except Xk65eicHSyw (2.75 s early); the 8 look-alikes that reached a fine scan (pre-game in ZusP81Ycn-U, bzsBWNpIwpo and Jnf_dLaVNMU; inside night 1 and after dawn in CBZfebaxD0E) scored pans 0-20% / moving 2-25%, the tours 24-63% / 34-62% and 36-54 s
+  40RdPP2AuMs 7:14-7:52, CBZfebaxD0E 7:30-8:07; split screens (S23E28, 2026-10-27) 40WQgtMozXM
+  10:15-10:39, VP2EVqrsWOE 7:49-8:11, 8myFCIe-Yeo 4:51-5:14 (their first nights, in FIRST_NIGHT_GT, end
+  14:50 / 12:48 / 9:29; before the fix night 1 started on the red light, 10:40 / 8:09 / 5:15, G2's 2 s
+  inside the grid). 31/31 tours found, 0 false tours. Final tour run: every end within 0.25 s of the marked second, every start too except Xk65eicHSyw (2.75 s early); the 8 look-alikes that reached a fine scan (pre-game in ZusP81Ycn-U, bzsBWNpIwpo and Jnf_dLaVNMU; inside night 1 and after dawn in CBZfebaxD0E) scored pans 0-20% / moving 2-25%, the tours 24-63% / 34-62% and 36-54 s
 
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR **PP-OCRv6 medium** det+rec (paddleocr 3.7.0) to find Chinese role names (狼人,
@@ -709,7 +744,7 @@ The user watches games on the server while development goes on, so there are two
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential). 2026-10-25, card-aware pipeline (one parallel run per game; scans cached in the session scratchpad and replayed with `analyze_phases(scan=...)`): GROUND_TRUTH 17/17, CARD_GROUND_TRUTH 28/28 games (31 tours), FIRST_NIGHT_GT 11/11 (S22 + two S23 hidden-roles games), and the night after every tour starts at its end 31/31. Threaded and sequential scans give identical arrays. 2026-10-26 (ratio merge needs a cut): GROUND_TRUTH 19/19 (d3jNiPSqMuI and zla5T_T4UKQ moved there from FIRST_NIGHT_GT with all their nights), FIRST_NIGHT_GT 9/9, CARD_GROUND_TRUTH 28/28; the change alters no other game's merges (checked over all clusters of the 31 cached scans).
+All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential). 2026-10-25, card-aware pipeline (one parallel run per game; scans cached in the session scratchpad and replayed with `analyze_phases(scan=...)`): GROUND_TRUTH 17/17, CARD_GROUND_TRUTH 28/28 games (31 tours), FIRST_NIGHT_GT 11/11 (S22 + two S23 hidden-roles games), and the night after every tour starts at its end 31/31. Threaded and sequential scans give identical arrays. 2026-10-26 (ratio merge needs a cut): GROUND_TRUTH 19/19 (d3jNiPSqMuI and zla5T_T4UKQ moved there from FIRST_NIGHT_GT with all their nights), FIRST_NIGHT_GT 9/9, CARD_GROUND_TRUTH 28/28; the change alters no other game's merges (checked over all clusters of the 31 cached scans). 2026-10-27 (split-screen card viewing, 45-min limit on tour candidates): CARD_GROUND_TRUTH 31/31 games (34 card viewings: the 31 tours + the three S23E28 split screens), GROUND_TRUTH 19/19, FIRST_NIGHT_GT 12/12 (with the three S23E28 first nights), the night after every card viewing starts at its end 34/34, and the 28 older games' cards and nights are identical to the 2026-10-26 run.
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05

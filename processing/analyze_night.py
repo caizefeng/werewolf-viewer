@@ -787,11 +787,11 @@ def analyze_phases(video_path, num_workers=0, scan=None):
         print("Looking for the card viewing (看牌)...")
         cards = find_card_phases(
             video_path, timestamps, motions, ratios,
-            day_seen=lambda t: evidence.sidebar_at(t - 3) or evidence.sidebar_at(t - 33))
+            day_seen=lambda t: evidence.sidebar_at(t - 3) or evidence.sidebar_at(t - 33), thumbs=thumbs)
         if cards:
             ratios = _mute_cards(timestamps, ratios, cards)
         else:
-            print("  No card-viewing tour found")
+            print("  No card viewing found")
 
         clusters = find_red_clusters(timestamps, ratios)
         print(f"  Found {len(clusters)} red cluster(s)")

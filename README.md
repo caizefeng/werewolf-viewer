@@ -20,7 +20,7 @@ The analysis samples the video every two seconds and reads the red ambient light
 
 ### The card viewing (看牌) is marked
 
-Before the first night the broadcast tours the twelve seats while each player looks at their role card. Nothing on screen labels it, so the analysis recognises the tour by its camera work: forty-odd seconds of seat close-ups joined by fast pans, between the still commentators' shot and the table at nightfall. It works for open and hidden-roles broadcasts alike, and finds both deals when a game is restarted. The tour shows as a teal segment on the progress bar and as the first row of the PHASES panel, so you can skip the pre-game and start right where the cards are dealt.
+Before the first night the broadcast tours the twelve seats while each player looks at their role card. Nothing on screen labels it, so the analysis recognises the tour by its camera work: forty-odd seconds of seat close-ups joined by fast pans, between the still commentators' shot and the table at nightfall. It works for open and hidden-roles broadcasts alike, and finds both deals when a game is restarted. Newer broadcasts show the card viewing as a split screen instead, four table cameras at once for about twenty seconds, and the analysis recognises that layout too. The card viewing shows as a teal segment on the progress bar and as the first row of the PHASES panel, so you can skip the pre-game and start right where the cards are dealt.
 
 The card viewing also anchors the first night, which begins the moment it ends. The first night's overlay starts exactly there, and a first night the red light did not reveal is still found: a studio that never switched the red light on gets a night that lasts until the player sidebar returns.
 
@@ -92,7 +92,7 @@ A tab that has been open for a while can't overwrite newer data. If the game cha
 
 ## How it works
 
-**Card viewing** (`processing/analyze_cards.py`). The same 2 s scan also measures how much a small thumbnail changes over a quarter second. Stretches where the camera keeps moving are re-scanned at 0.5 s, split into shots, and grown to the long still shot on each side; a stretch counts as the seat tour when it lasts 25-80 s and enough of it is pans or cuts (a slower tour qualifies when the red night light follows within 30 s). A short table shot at nightfall is trimmed off, and a later tour counts only as a re-deal, before the first day. Checked against all 31 tours in 28 hand-verified games from three seasons, open and hidden roles: every tour found, no false ones.
+**Card viewing** (`processing/analyze_cards.py`). The same 2 s scan also measures how much a small thumbnail changes over a quarter second. Stretches where the camera keeps moving are re-scanned at 0.5 s, split into shots, and grown to the long still shot on each side; a stretch counts as the seat tour when it lasts 25-80 s and enough of it is pans or cuts (a slower tour qualifies when the red night light follows within 30 s). A short table shot at nightfall is trimmed off, and a later tour counts only as a re-deal, before the first day. When there is no tour, it looks for the split screen newer broadcasts use: a 2x2 grid whose seams lie exactly on the frame's centre lines, found from the scan's thumbnails and confirmed on full frames, with its two cuts refined to 0.25 s. Night shows use such grids too (the wolves), so a grid counts only before any night light and when the night follows it. Checked against all 31 tours in 28 hand-verified games from three seasons, open and hidden roles, plus 3 split-screen games: every card viewing found, no false ones.
 
 **Night detection** (`processing/analyze_night.py`). Three threads scan the bottom corners of a frame every 2 s and compute the red-to-green ratio; red studio light reads 2.5 and above, daylight about 1.1. Red clusters are merged into nights by three rules: both gap boundaries are camera cuts; the gap stays red-tinted and the camera left the table at one end (close-ups during a night; when the light goes off and on again over the table it is a short day, even one lit purple); or, for newer broadcasts that cut away for minutes at a time, no day evidence lies in the gap. Day evidence is the player sidebar being on screen, or the broadcast's own 天黑请闭眼 / 天亮请睁眼 banners, found by OCR only inside candidate gaps. Boundaries are then refined at 0.25 s. No night starts before the card viewing ends (pre-game lighting and the red tablecloth in the tour's close-ups used to start some first nights early): the first night starts exactly where the card viewing ends, and one the red light missed is filled in from there to the first sighting of the sidebar. The detector is validated against 19 hand-verified games (0 false positives, 0 misses) plus the first nights of 9 more.
 
@@ -219,7 +219,7 @@ werewolf-viewer/
 ├── processing/
 │   ├── analyze.py              # pipeline: night + role detection in parallel, writes metadata.json
 │   ├── analyze_night.py        # night phases (corner redness, cut/ratio/evidence merging, refinement)
-│   ├── analyze_cards.py        # card viewing (看牌): the seat tour, from camera motion
+│   ├── analyze_cards.py        # card viewing (看牌): the seat tour (camera motion) or the split screen
 │   ├── analyze_names.py        # role map and masks (PaddleOCR), banner and sidebar checks
 │   ├── update_role_maps.py     # re-scan roles only, preserving manual edits
 │   ├── download.py             # yt-dlp download with client fallbacks
@@ -264,7 +264,7 @@ Night detection constants live at the top of `processing/analyze_night.py`:
 | `MIN_PHASE_DURATION` | 35 s | Shorter red stretches are ignored |
 | `ENTRY_BUFFER` / `EXIT_BUFFER` | 2 s / 1 s | Overlay lead before red-on and lag after red-off |
 
-Card-viewing thresholds (`CARD_*`: tour length, pan and motion shares, re-deal window) are at the top of `processing/analyze_cards.py`. Reveal band geometry is `BAND_PAD` and `BAND_GUARD` in `web/src/player.js`.
+Card-viewing thresholds (`CARD_*`: tour length, pan and motion shares, re-deal window; `GRID_*` for the split screen) are at the top of `processing/analyze_cards.py`. Reveal band geometry is `BAND_PAD` and `BAND_GUARD` in `web/src/player.js`.
 
 ## License
 

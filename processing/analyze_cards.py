@@ -24,12 +24,18 @@ pans. Detection:
 A broadcast can deal twice (a game restarted before day 1: S21E05 G2, S23E24
 G2 and G3), so a later candidate is kept too as long as no day lies between,
 i.e. the player sidebar does not show just before it.
+
+Since S23E28 (2026-10-27) the broadcast shows the card viewing differently:
+four fixed cameras, three seats each, as a 2x2 split screen for ~22 s while all
+twelve players check their cards at once, then a cut to the night's table.
+Nothing moves, so the tour search finds nothing; when it finds no tour, the
+split screen is looked for instead (see GRID_*).
 """
 
 import cv2
 import numpy as np
 
-from analyze_night import RED_THRESH, _frame_redness, _thumb
+from analyze_night import REFINE_STEP, RED_THRESH, SCAN_INTERVAL, _frame_redness, _frames, _thumb
 
 
 CARD_COARSE = 12        # coarse: a 2 s sample "moves" above this (0-255 thumbnail change)
@@ -56,6 +62,18 @@ FINE_MARGIN = 60        # s of context scanned on each side of a core
 NOT_RED = 1.8           # corner R/G clearly below the night light (RED_THRESH)
 SAME_SET = 15           # mean thumbnail difference below which two shots show the same set
 NIGHT_SHOT_WINDOW = 15  # s; the night's table shot starts this close to the return to that set
+# Split screen (S23E28 on). Its seams lie exactly on the frame's centre lines,
+# which are also block edges of the scan's 32x18 thumbnails (60 px at 1080p).
+# Night shows use 2x2 grids too (the wolves: S21 F2J0QK_3gUo, S22
+# d3jNiPSqMuI), so only a grid before the first night's red light counts
+GRID_COARSE = 1.6       # thumbnail: horizontal centre line vs the lines beside it (card grids 2.4-6.8)
+GRID_MIN_CORE = 10      # s; shortest run of such coarse samples (the card grids last 21-24 s)
+GRID_SEAM = 3.0         # full frame: weakest half seam (card grids >= 3.7, three-panel layouts <= 2.8)
+# A frame is past the grid's cut below this: single pictures score under 1,
+# while the grid keeps 2.7+ as the studio dims for nightfall (S23E28 G1)
+GRID_EDGE_SEAM = 1.5
+GRID_NIGHT_RUN = 6      # s; red light this long before a grid means a night has begun
+GRID_EDGE_SEARCH = 12   # s; how far past the coarse run its cuts are looked for
 
 
 def coarse_cores(timestamps, motions, motion=CARD_COARSE, bridge=CARD_BRIDGE,
@@ -65,17 +83,19 @@ def coarse_cores(timestamps, motions, motion=CARD_COARSE, bridge=CARD_BRIDGE,
     out = []
     s = last = None
     for t, m in zip(timestamps, motions):
-        if t > t_max and s is None:
-            break
         if m < motion:
             continue
-        if s is None:
-            s = last = t
-        elif t - last > bridge:
+        if s is not None and t - last > bridge:
             out.append((s, last))
-            s = last = t
-        else:
-            last = t
+            s = None
+        if s is None:
+            # No run starts past t_max (until 2026-10-27 this held only before
+            # the first run, so a game without a tour had candidates
+            # fine-scanned all through it, up to CARD_MAX_SCANS of them)
+            if t > t_max:
+                break
+            s = t
+        last = t
     if s is not None:
         out.append((s, last))
     return [(float(a), float(b)) for a, b in out if b - a >= min_core]
@@ -247,8 +267,107 @@ def scan_core(cap, fps, core):
     return stats
 
 
-def find_card_phases(video_path, timestamps, motions, ratios, day_seen=None):
-    """The card-viewing tours as [(start, end)], earliest first.
+def centre_lines(thumbs):
+    """Per scan thumbnail (32x18 colour): how sharply it splits at its
+    horizontal centre line, the contrast across that line over the contrast
+    across the lines beside it, the weaker of the left and right halves."""
+    t = np.asarray(thumbs, dtype=np.float32)
+    rows = np.abs(t[:, 1:] - t[:, :-1]).mean(axis=3)      # [:, r]: across the line below row r
+    halves = [rows[:, 8, s].mean(axis=1) / (rows[:, [6, 7, 9, 10], s].mean(axis=(1, 2)) + 1)
+              for s in (slice(0, 16), slice(16, 32))]
+    return np.minimum(*halves)
+
+
+def grid_seams(frame):
+    """How clearly a frame is a 2x2 grid of four pictures: the weakest of its
+    four half seams (upper / lower half of the vertical centre line, left /
+    right half of the horizontal one), each the median step across the seam
+    over the median step 3-8 px beside it. Four pictures meet in a seam one
+    pixel wide; a single picture scores under 1."""
+    h, w = frame.shape[:2]
+    cx, cy = w // 2, h // 2
+    worst = np.inf
+    for band, split in ((frame[:, cx - 8:cx + 8], cy), (frame[cy - 8:cy + 8].transpose(1, 0, 2), cx)):
+        steps = np.abs(np.diff(band.astype(np.int16).sum(axis=2), axis=1))  # [:, 7]: across the centre line
+        for half in (steps[:split], steps[split:]):
+            med = np.median(half, axis=0)
+            beside = np.median(np.concatenate([med[:4], med[11:]]))
+            worst = min(worst, med[6:9].max() / (beside + 2.0))
+    return float(worst)
+
+
+def night_before(timestamps, ratios, t, run=GRID_NIGHT_RUN):
+    """Was the red night light on for `run` s at a stretch before t?"""
+    start = None
+    for u, r in zip(timestamps, ratios):
+        if u >= t:
+            break
+        if r < RED_THRESH:
+            start = None
+        elif start is None:
+            start = u
+        elif u - start >= run:
+            return True
+    return False
+
+
+def _frame_at(cap, fps, t):
+    cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(t * fps)))
+    ok, frame = cap.read()
+    return frame if ok else None
+
+
+def _grid_edge(cap, fps, t, direction):
+    """The cut into (direction -1) or out of (+1) the grid showing at t: the
+    middle of the step between the last grid frame and the first frame past
+    it, looked for at REFINE_STEP up to GRID_EDGE_SEARCH s away (t if none)."""
+    for k in range(int(GRID_EDGE_SEARCH / SCAN_INTERVAL)):
+        if direction < 0:
+            lo, hi = max(0.0, t - (k + 1) * SCAN_INTERVAL), t - k * SCAN_INTERVAL
+        else:
+            lo, hi = t + k * SCAN_INTERVAL + REFINE_STEP, t + (k + 1) * SCAN_INTERVAL + REFINE_STEP
+        if hi <= lo:
+            break
+        other = [u for u, frame in _frames(cap, fps, lo, hi) if grid_seams(frame) < GRID_EDGE_SEAM]
+        if other:
+            return max(other) + REFINE_STEP / 2 if direction < 0 else min(other) - REFINE_STEP / 2
+    return t
+
+
+def find_grid(cap, fps, timestamps, thumbs, ratios, day_seen=None):
+    """The split-screen card viewing as [(start, end)], or []: the first 2x2
+    grid (a run of coarse samples split at the horizontal centre line, then
+    all four seams checked on full frames) that the night light follows within
+    CARD_RED_WITHIN, before any night light and outside daytime."""
+    runs = coarse_cores(timestamps, centre_lines(thumbs), motion=GRID_COARSE,
+                        bridge=2 * SCAN_INTERVAL, min_core=GRID_MIN_CORE)
+    checks = 0
+    for a, b in runs:
+        if night_before(timestamps, ratios, a):
+            break                       # the first night has begun: later grids are the wolves'
+        if not red_after(timestamps, ratios, b):
+            continue                    # no night follows
+        if checks >= CARD_MAX_SCANS:
+            break
+        checks += 1
+        probes = [_frame_at(cap, fps, a + (b - a) * f) for f in (0.25, 0.5, 0.75)]
+        if sum(p is not None and grid_seams(p) >= GRID_SEAM for p in probes) < 2:
+            continue                    # not four pictures (e.g. a three-panel layout)
+        start, end = _grid_edge(cap, fps, a, -1), _grid_edge(cap, fps, b, +1)
+        daytime = day_seen is not None and day_seen(start)
+        print(f"  Split-screen candidate {_fmt(start)}-{_fmt(end)} ({end - start:.0f}s): "
+              + ("rejected (the player sidebar is up: daytime)" if daytime else "card viewing"))
+        if daytime:
+            break
+        return [(round(start, 2), round(end, 2))]
+    return []
+
+
+def find_card_phases(video_path, timestamps, motions, ratios, day_seen=None, thumbs=None):
+    """The card-viewing phases as [(start, end)], earliest first: the seat
+    tours, or when there is none the split screen (thumbs: the scan's colour
+    thumbnails; a broadcast restarted in that format would show a second grid,
+    not seen yet, so only the first is taken).
 
     timestamps / motions / ratios: the night scan's coarse samples (ratios =
     corner R/G, for the red light after a slow tour). day_seen(t) -> bool says
@@ -259,8 +378,6 @@ def find_card_phases(video_path, timestamps, motions, ratios, day_seen=None):
     and before the first day, so the search ends there.
     """
     cores = coarse_cores(timestamps, motions)
-    if not cores:
-        return []
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     found = []
@@ -286,6 +403,8 @@ def find_card_phases(video_path, timestamps, motions, ratios, day_seen=None):
                       f"{verdict}")
             if ok:
                 found.append((stats["start"], stats["end"]))
+        if not found and thumbs is not None:
+            found = find_grid(cap, fps, timestamps, thumbs, ratios, day_seen)
     finally:
         cap.release()
     return found

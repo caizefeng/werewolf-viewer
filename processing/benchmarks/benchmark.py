@@ -99,6 +99,9 @@ CARD_GROUND_TRUTH = {
     # of a tour, from the cut away from the commentators to the cut to the
     # night's table (checked on frames)
     "40WQgtMozXM": [(615, 639)], "VP2EVqrsWOE": [(469, 491)], "8myFCIe-Yeo": [(291, 314)],
+    # S23E29 (2026-10-28): split screens too; G3 (fMxD6khxj2Q) is a hidden-roles
+    # broadcast that cuts from it straight back to the commentators, no red light
+    "fKAPQrNC8nA": [(552, 573)], "HYxFL5DLI8Y": [(430, 453)], "fMxD6khxj2Q": [(436, 461)],
 }
 CARD_TOLERANCE = 3  # seconds (Xk65eicHSyw's tour starts ~2.5 s early: a split commentators' shot)
 
@@ -119,8 +122,10 @@ FIRST_NIGHT_GT = {
     "HpIM5xTU-t8": (416, 710, 0),    # S23E25 第三局: commentators until 11:49
     "pZ0vo8VRDkA": (485, 540, 0),    # S23E24 第三局, first deal (abandoned at dawn, table red until 9:00);
                                      # the second deal's night 1 is 14:22-18:13
-    # S23E28: night 1 from the split screen's end to the red light going off
+    # S23E28, S23E29: night 1 from the split screen's end to the red light going off
     "40WQgtMozXM": (639, 890, 0), "VP2EVqrsWOE": (491, 768, 0), "8myFCIe-Yeo": (314, 569, 0),
+    "fKAPQrNC8nA": (573, 793, 0), "HYxFL5DLI8Y": (453, 710, 0),
+    "fMxD6khxj2Q": (461, 717, 0),    # S23E29 第三局, hidden roles: commentators until 11:57
 }
 
 TOLERANCE = 5  # seconds (ground truth approximate, buffer settings may differ)

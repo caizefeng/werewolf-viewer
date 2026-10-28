@@ -687,10 +687,13 @@ def first_sidebar_after(evidence, t0, t1, step=DAWN_SEARCH_STEP):
     return None
 
 
-def _covered_night_end(video_path, timestamps, thumbs, cs, ce, limit):
-    """End of a night the broadcast covers with the commentators (the set
-    shown just before the tour at cs..ce), or None when it does not go back
-    to that set right after the tour (see COVER_*)."""
+def _cover_span(timestamps, thumbs, cs, ce, limit):
+    """The commentators covering the night after the card viewing at cs..ce:
+    when the set shown just before it returns within COVER_WITHIN of ce and
+    stays (gaps < COVER_GAP) for at least COVER_MIN, (that set's median
+    thumbnail, the set's last scan sample before limit), else None. Also
+    what tells a hidden-roles broadcast's split screen from other grids
+    (analyze_cards.find_grid)."""
     pre = (timestamps >= cs - 10) & (timestamps <= cs - 2)
     if pre.sum() < 3:
         return None
@@ -707,24 +710,35 @@ def _covered_night_end(video_path, timestamps, thumbs, cs, ce, limit):
         last = t
     if last - hits[0] < COVER_MIN:
         return None
+    return ref, float(last)
+
+
+def _covered_night_end(video_path, timestamps, thumbs, cs, ce, limit):
+    """End of a night the broadcast covers with the commentators (the set
+    shown just before the tour at cs..ce), or None when it does not go back
+    to that set right after the tour (see COVER_*)."""
+    cover = _cover_span(timestamps, thumbs, cs, ce, limit)
+    if cover is None:
+        return None
+    ref, last = cover
     # The cut away from the set lies within the next sample interval. The
     # table it cuts back to can still be red-lit for a few seconds: the
     # night lasts until that light goes off
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     end = None
-    for t, frame in _frames(cap, fps, float(last) + REFINE_STEP, float(last) + COVER_RED_MAX):
+    for t, frame in _frames(cap, fps, last + REFINE_STEP, last + COVER_RED_MAX):
         if end is None:
             if np.abs(_thumb_colour(frame).astype(np.float32) - ref).mean() >= COVER_SAME:
                 end = t
             elif t >= last + SCAN_INTERVAL:
-                end = float(last) + SCAN_INTERVAL
+                end = last + SCAN_INTERVAL
         if end is not None:
             if _frame_redness(frame) < RED_THRESH:
                 break
             end = t + EXIT_BUFFER
     cap.release()
-    return end if end is not None else float(last) + SCAN_INTERVAL
+    return end if end is not None else last + SCAN_INTERVAL
 
 
 def _link_first_nights(results, cards, evidence, duration, video_path, timestamps, thumbs):
@@ -785,9 +799,8 @@ def analyze_phases(video_path, num_workers=0, scan=None):
     evidence = _Evidence(video_path)
     try:
         print("Looking for the card viewing (看牌)...")
-        cards = find_card_phases(
-            video_path, timestamps, motions, ratios,
-            day_seen=lambda t: evidence.sidebar_at(t - 3) or evidence.sidebar_at(t - 33), thumbs=thumbs)
+        cards = find_card_phases(video_path, timestamps, motions, ratios,
+                                 sidebar_at=evidence.sidebar_at, thumbs=thumbs)
         if cards:
             ratios = _mute_cards(timestamps, ratios, cards)
         else:

@@ -211,7 +211,8 @@ The user watches games on the server while development goes on, so there are two
   - **hidden-roles broadcasts** (whose nights analyze.py no longer writes, see "Hidden-roles
     broadcasts" below; this stays benchmarked) show the table for 5-10 s, then cover the night with the
     commentators -- the very set shown just before the tour -- and cut back at dawn (S22E47 G2/G3,
-    S22E48 G1). `_covered_night_end`: the pre-tour set (median 32x18 colour thumbnail of the scan
+    S22E48 G1). `_covered_night_end` (the set test is `_cover_span`, shared with the split-screen
+    search): the pre-tour set (median 32x18 colour thumbnail of the scan
     samples 10-2 s before the tour) must return within COVER_WITHIN (30 s) of the tour and stay
     (mean thumbnail difference < COVER_SAME 20, gaps < COVER_GAP 12 s) for >= COVER_MIN (30 s); the
     night ends when it leaves (refined at 0.25 s), or when the red light goes off on the table it cuts
@@ -316,12 +317,12 @@ The user watches games on the server while development goes on, so there are two
 - **Accept** (`is_tour`): length 25-80 s and pans >= 30% and moving >= 30%; a slower tour (S21 holds
   each seat longer: F2J0QK_3gUo pans 24%) also passes at >= 15% / 20% when the red light comes on within
   CARD_RED_WITHIN (30 s) of its end. No tour is in daytime: a candidate with the player sidebar up
-  3 s / 33 s before it (`day_seen`, 1-2 OCR checks) is rejected, which matters because the night
+  3 s / 33 s before it (`_day_before`, 1-2 OCR checks) is rejected, which matters because the night
   search ignores all red light before the first tour (a false tour on day 1 would erase night 1).
   The first accepted tour is 看牌; later candidates are only a re-deal: within CARD_REDEAL_WITHIN
   (15 min) and before the first day, where the search stops. At most CARD_MAX_SCANS (6) fine scans
 - **Split screen** (`find_grid`, user report 2026-10-27: "S23E28 didn't have 看牌 phases"): the three
-  S23E28 games show no tour; after the commentators they cut to a 2x2 grid of four fixed table
+  S23E28 games (and S23E29's) show no tour; after the commentators they cut to a 2x2 grid of four fixed table
   cameras, three seats each, for 21-24 s while all twelve players check their cards at once, then to
   the night table (天黑请闭眼 over the grid's last 0.5 s). Nothing moves, so no coarse core covered it.
   `find_card_phases` searches for it only when no tour is accepted, so tour games behave as before
@@ -332,7 +333,9 @@ The user watches games on the server while development goes on, so there are two
     mostly < 1, single samples up to 4.2. The vertical one is weak at that scale (both top quadrants
     are dark there). Runs >= GRID_COARSE (1.6) lasting >= GRID_MIN_CORE (10 s), one sample may miss
     (`coarse_cores` on this score). At 1.6 only the three S23E28 grids pass the red-light rules below
-    across 34 cached games; at 1.4 four look-alikes would also need the seam check
+    across 34 cached games; at 1.4 four look-alikes would also need the seam check. With the cover rule
+    (2026-10-28, 37 scans): the six S23E28/E29 grids, plus one run in a game without its video
+    (JKWot0-n6Hc 31:12, see "The night after it")
   - Verify (`grid_seams`, 3 full frames at 25/50/75% of the run, 2 must pass): each of the four half
     seams' median step across the centre line over the median step 3-8 px beside it; the weakest >=
     GRID_SEAM (3.0). Card grids 3.7-23 per frame (pixel-exact seams, no border), single pictures < 1,
@@ -341,14 +344,31 @@ The user watches games on the server while development goes on, so there are two
     26:20), and they pass the seam check. So the search stops at the first run after red light held
     >= GRID_NIGHT_RUN (6 s) (`night_before`: nothing before the card viewing is night; the S23 games
     have no such red before it, S21/S22 pre-games had some, where the search would simply stop: a
-    missed card viewing, never a false one); it also needs red light within CARD_RED_WITHIN after the
-    grid (`red_after`) and rejects daytime (`day_seen`). Only the first grid is taken: no re-deal has
-    been seen in this format, and a later grid may be the wolves'
+    missed card viewing, never a false one); it also rejects daytime (`_day_before`) and needs the
+    night to follow (next point). Only the first grid is taken: no re-deal has been seen in this
+    format, and a later grid may be the wolves'
+  - The night after it: red light within CARD_RED_WITHIN (`red_after`), or, when there is none, the
+    commentators covering it (user report 2026-10-28: "the hidden role game S23E29G3 does not have card
+    viewing phase detected"). That hidden-roles broadcast cuts from the grid (7:16-7:41) straight back
+    to the commentators until dawn at 11:57, with no red table anywhere in night 1, so `red_after`
+    dropped the grid silently. The cover is `_cover_span`, the test `_covered_night_end` uses for the
+    first night after a hidden-roles tour (the set shown 10-2 s before the grid returns within
+    COVER_WITHIN and stays COVER_MIN; G3: back after 2 s, stays 254 s). A covered grid also needs the
+    player sidebar within GRID_DAY_WITHIN (120 s) of the commentators leaving, checked every
+    GRID_DAY_STEP (30 s), because day 1 begins there: in all seven covered first nights (S22E47 G2/G3,
+    S22E48 G1, S23E24 G2/G3, S23E25 G3, S23E29 G3) it showed 25-50 s after the cover's last sample.
+    A pre-game grid between two commentator shots would be followed by the card viewing instead
+    (rejected, and the search goes on). 1-4 extra OCR checks, only in this branch. Known limit: a
+    hidden-roles broadcast has no red light to stop the search, so if its card grid were missed a later
+    grid between commentator shots could be taken (no such grid in the 34 cached games; the only
+    covered look-alike run before any red light, JKWot0-n6Hc 31:12, deleted, is in a game with a tour)
   - Edges (`_grid_edge`): outward from the run's first/last sample at REFINE_STEP until a frame
     scores < GRID_EDGE_SEAM (1.5); the cut is the middle of that step. Lower than GRID_SEAM because
     the grid dims with the studio at nightfall (S23E28 G1: 2.75-3.8 for the last 1.2 s, which a 3.0
     edge cut short). Checked 2026-10-27: the grid search alone (no tour search first) on all 31 cached
-    games with video finds exactly the three S23E28 grids, each within 0.4 s of the cuts on the frames
+    games with video finds exactly the three S23E28 grids, each within 0.4 s of the cuts on the frames;
+    2026-10-28, with the cover rule, on 34: exactly the six S23E28/E29 grids (E29's on the cuts seen in
+    0.25 s seam steps), only G3 through the cover
 - **Ground truth** (28 games, every tour checked on frames: the shot before is the commentators, the
   first/last tour shot a player close-up, the shot after the table; research features + simulation
   in the session scratchpad): S21 -ESYZWvQMH4 7:35-8:18, 65R0r19JyYk 11:44-12:27, EC-1bimFjo4
@@ -362,7 +382,9 @@ The user watches games on the server while development goes on, so there are two
   40RdPP2AuMs 7:14-7:52, CBZfebaxD0E 7:30-8:07; split screens (S23E28, 2026-10-27) 40WQgtMozXM
   10:15-10:39, VP2EVqrsWOE 7:49-8:11, 8myFCIe-Yeo 4:51-5:14 (their first nights, in FIRST_NIGHT_GT, end
   14:50 / 12:48 / 9:29; before the fix night 1 started on the red light, 10:40 / 8:09 / 5:15, G2's 2 s
-  inside the grid). 31/31 tours found, 0 false tours. Final tour run: every end within 0.25 s of the marked second, every start too except Xk65eicHSyw (2.75 s early); the 8 look-alikes that reached a fine scan (pre-game in ZusP81Ycn-U, bzsBWNpIwpo and Jnf_dLaVNMU; inside night 1 and after dawn in CBZfebaxD0E) scored pans 0-20% / moving 2-25%, the tours 24-63% / 34-62% and 36-54 s
+  inside the grid); S23E29 (2026-10-28) fKAPQrNC8nA 9:12-9:33, HYxFL5DLI8Y 7:10-7:33, fMxD6khxj2Q
+  7:16-7:41 (hidden roles; first nights end 13:13 / 11:50 on the red light, 11:57 where the commentators
+  cut back to the table). 31/31 tours found, 0 false tours. Final tour run: every end within 0.25 s of the marked second, every start too except Xk65eicHSyw (2.75 s early); the 8 look-alikes that reached a fine scan (pre-game in ZusP81Ycn-U, bzsBWNpIwpo and Jnf_dLaVNMU; inside night 1 and after dawn in CBZfebaxD0E) scored pans 0-20% / moving 2-25%, the tours 24-63% / 34-62% and 36-54 s
 
 ### Name Mask Detection (analyze_names.py)
 - Uses PaddleOCR **PP-OCRv6 medium** det+rec (paddleocr 3.7.0) to find Chinese role names (狼人,
@@ -744,7 +766,7 @@ The user watches games on the server while development goes on, so there are two
 
 ## Ground Truth - Night Phase Boundaries
 Not every game has the same number of phases. Use these timestamps (±2s tolerance).
-All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential). 2026-10-25, card-aware pipeline (one parallel run per game; scans cached in the session scratchpad and replayed with `analyze_phases(scan=...)`): GROUND_TRUTH 17/17, CARD_GROUND_TRUTH 28/28 games (31 tours), FIRST_NIGHT_GT 11/11 (S22 + two S23 hidden-roles games), and the night after every tour starts at its end 31/31. Threaded and sequential scans give identical arrays. 2026-10-26 (ratio merge needs a cut): GROUND_TRUTH 19/19 (d3jNiPSqMuI and zla5T_T4UKQ moved there from FIRST_NIGHT_GT with all their nights), FIRST_NIGHT_GT 9/9, CARD_GROUND_TRUTH 28/28; the change alters no other game's merges (checked over all clusters of the 31 cached scans). 2026-10-27 (split-screen card viewing, 45-min limit on tour candidates): CARD_GROUND_TRUTH 31/31 games (34 card viewings: the 31 tours + the three S23E28 split screens), GROUND_TRUTH 19/19, FIRST_NIGHT_GT 12/12 (with the three S23E28 first nights), the night after every card viewing starts at its end 34/34, and the 28 older games' cards and nights are identical to the 2026-10-26 run.
+All 9 videos below plus the 8 S23 videos in the next section pass (benchmark.py GROUND_TRUTH, 2026-10-15: 17/17 OK with the banner-aware merge code, parallel == sequential). 2026-10-25, card-aware pipeline (one parallel run per game; scans cached in the session scratchpad and replayed with `analyze_phases(scan=...)`): GROUND_TRUTH 17/17, CARD_GROUND_TRUTH 28/28 games (31 tours), FIRST_NIGHT_GT 11/11 (S22 + two S23 hidden-roles games), and the night after every tour starts at its end 31/31. Threaded and sequential scans give identical arrays. 2026-10-26 (ratio merge needs a cut): GROUND_TRUTH 19/19 (d3jNiPSqMuI and zla5T_T4UKQ moved there from FIRST_NIGHT_GT with all their nights), FIRST_NIGHT_GT 9/9, CARD_GROUND_TRUTH 28/28; the change alters no other game's merges (checked over all clusters of the 31 cached scans). 2026-10-27 (split-screen card viewing, 45-min limit on tour candidates): CARD_GROUND_TRUTH 31/31 games (34 card viewings: the 31 tours + the three S23E28 split screens), GROUND_TRUTH 19/19, FIRST_NIGHT_GT 12/12 (with the three S23E28 first nights), the night after every card viewing starts at its end 34/34, and the 28 older games' cards and nights are identical to the 2026-10-26 run. 2026-10-28 (a split screen the commentators' cover follows counts, S23E29 G3): CARD_GROUND_TRUTH 34/34 games (with the three S23E29 split screens), GROUND_TRUTH 19/19, FIRST_NIGHT_GT 15/15 (with the three S23E29 first nights, G3's covered by the commentators), night after every card viewing at its end 37/37, and the 31 games of the 2026-10-27 run identical.
 
 ### 65R0r19JyYk (S21E03)
 - 12:31 -- 17:05

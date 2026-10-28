@@ -29,13 +29,16 @@ Since S23E28 (2026-10-27) the broadcast shows the card viewing differently:
 four fixed cameras, three seats each, as a 2x2 split screen for ~22 s while all
 twelve players check their cards at once, then a cut to the night's table.
 Nothing moves, so the tour search finds nothing; when it finds no tour, the
-split screen is looked for instead (see GRID_*).
+split screen is looked for instead (see GRID_*). A hidden-roles broadcast in
+that format (S23E29 G3, 2026-10-28) cuts from the split screen straight back to
+the commentators, who cover the whole first night, so no red light follows it.
 """
 
 import cv2
 import numpy as np
 
-from analyze_night import REFINE_STEP, RED_THRESH, SCAN_INTERVAL, _frame_redness, _frames, _thumb
+from analyze_night import (DAWN_SEARCH_TO, REFINE_STEP, RED_THRESH, SCAN_INTERVAL, _cover_span,
+                           _frame_redness, _frames, _thumb)
 
 
 CARD_COARSE = 12        # coarse: a 2 s sample "moves" above this (0-255 thumbnail change)
@@ -74,6 +77,14 @@ GRID_SEAM = 3.0         # full frame: weakest half seam (card grids >= 3.7, thre
 GRID_EDGE_SEAM = 1.5
 GRID_NIGHT_RUN = 6      # s; red light this long before a grid means a night has begun
 GRID_EDGE_SEARCH = 12   # s; how far past the coarse run its cuts are looked for
+# The night after a grid shows as its red light, or in a hidden-roles
+# broadcast as the commentators covering it (analyze_night._cover_span). A
+# covered grid counts only when the player sidebar then shows within
+# GRID_DAY_WITHIN of the commentators leaving, as day 1 begins (25-50 s after
+# the covered first nights of seven hidden-roles games, S22-S23); a pre-game
+# grid between two commentator shots would not have that
+GRID_DAY_WITHIN = 120   # s
+GRID_DAY_STEP = 30      # s between those sidebar checks
 
 
 def coarse_cores(timestamps, motions, motion=CARD_COARSE, bridge=CARD_BRIDGE,
@@ -334,19 +345,28 @@ def _grid_edge(cap, fps, t, direction):
     return t
 
 
-def find_grid(cap, fps, timestamps, thumbs, ratios, day_seen=None):
+def _day_before(sidebar_at, t):
+    """Is the player sidebar (daytime) up 3 s or 33 s before t?"""
+    return sidebar_at(t - 3) or sidebar_at(t - 33)
+
+
+def find_grid(cap, fps, timestamps, thumbs, ratios, sidebar_at=None):
     """The split-screen card viewing as [(start, end)], or []: the first 2x2
     grid (a run of coarse samples split at the horizontal centre line, then
-    all four seams checked on full frames) that the night light follows within
-    CARD_RED_WITHIN, before any night light and outside daytime."""
+    all four seams checked on full frames) before any night light, outside
+    daytime and followed by the night: its red light within CARD_RED_WITHIN,
+    or the commentators covering it until day 1 (see GRID_DAY_WITHIN)."""
     runs = coarse_cores(timestamps, centre_lines(thumbs), motion=GRID_COARSE,
                         bridge=2 * SCAN_INTERVAL, min_core=GRID_MIN_CORE)
     checks = 0
     for a, b in runs:
         if night_before(timestamps, ratios, a):
             break                       # the first night has begun: later grids are the wolves'
+        cover = None
         if not red_after(timestamps, ratios, b):
-            continue                    # no night follows
+            cover = _cover_span(timestamps, thumbs, a, b, b + DAWN_SEARCH_TO)
+            if cover is None:
+                continue                # no night follows
         if checks >= CARD_MAX_SCANS:
             break
         checks += 1
@@ -354,28 +374,37 @@ def find_grid(cap, fps, timestamps, thumbs, ratios, day_seen=None):
         if sum(p is not None and grid_seams(p) >= GRID_SEAM for p in probes) < 2:
             continue                    # not four pictures (e.g. a three-panel layout)
         start, end = _grid_edge(cap, fps, a, -1), _grid_edge(cap, fps, b, +1)
-        daytime = day_seen is not None and day_seen(start)
-        print(f"  Split-screen candidate {_fmt(start)}-{_fmt(end)} ({end - start:.0f}s): "
-              + ("rejected (the player sidebar is up: daytime)" if daytime else "card viewing"))
-        if daytime:
+        head = f"  Split-screen candidate {_fmt(start)}-{_fmt(end)} ({end - start:.0f}s): "
+        if sidebar_at is not None and _day_before(sidebar_at, start):
+            print(head + "rejected (the player sidebar is up: daytime)")
             break
+        note = ""
+        if cover is not None:
+            dawn = cover[1] + SCAN_INTERVAL     # the commentators leave within the next sample
+            if sidebar_at is not None and not any(
+                    sidebar_at(dawn + k * GRID_DAY_STEP) for k in range(1, GRID_DAY_WITHIN // GRID_DAY_STEP + 1)):
+                print(head + f"rejected (no red light, and no day after the commentators at {_fmt(dawn)})")
+                continue
+            note = f" (no red light: the commentators cover the night until {_fmt(dawn)})"
+        print(head + "card viewing" + note)
         return [(round(start, 2), round(end, 2))]
     return []
 
 
-def find_card_phases(video_path, timestamps, motions, ratios, day_seen=None, thumbs=None):
+def find_card_phases(video_path, timestamps, motions, ratios, sidebar_at=None, thumbs=None):
     """The card-viewing phases as [(start, end)], earliest first: the seat
     tours, or when there is none the split screen (thumbs: the scan's colour
     thumbnails; a broadcast restarted in that format would show a second grid,
     not seen yet, so only the first is taken).
 
     timestamps / motions / ratios: the night scan's coarse samples (ratios =
-    corner R/G, for the red light after a slow tour). day_seen(t) -> bool says
-    whether the player sidebar (daytime) shows just before t: a tour is never
-    in daytime, which matters because the night search ignores all red light
-    before the first tour (a false tour on day 1 would erase night 1). After
-    the first tour a later one is only a re-deal, within CARD_REDEAL_WITHIN
-    and before the first day, so the search ends there.
+    corner R/G, for the red light after a slow tour). sidebar_at(t) -> bool
+    says whether the player sidebar (daytime) is on screen at t: a tour is
+    never in daytime (the sidebar up just before it), which matters because
+    the night search ignores all red light before the first tour (a false tour
+    on day 1 would erase night 1). After the first tour a later one is only a
+    re-deal, within CARD_REDEAL_WITHIN and before the first day, so the search
+    ends there.
     """
     cores = coarse_cores(timestamps, motions)
     cap = cv2.VideoCapture(video_path)
@@ -389,13 +418,13 @@ def find_card_phases(video_path, timestamps, motions, ratios, day_seen=None, thu
             if found and core[0] <= found[-1][1]:
                 continue
             if found and (core[0] > found[-1][1] + CARD_REDEAL_WITHIN
-                          or day_seen is None or day_seen(core[0])):
+                          or sidebar_at is None or _day_before(sidebar_at, core[0])):
                 break
             stats = scan_core(cap, fps, core)
             scans += 1
             ok = is_tour(stats, stats is not None and red_after(timestamps, ratios, stats["end"]))
             verdict = "tour" if ok else "rejected"
-            if ok and day_seen is not None and day_seen(stats["start"]):
+            if ok and sidebar_at is not None and _day_before(sidebar_at, stats["start"]):
                 ok, verdict = False, "rejected (the player sidebar is up: daytime)"
             if stats is not None:
                 print(f"  Card-viewing candidate {_fmt(stats['start'])}-{_fmt(stats['end'])} "
@@ -404,7 +433,7 @@ def find_card_phases(video_path, timestamps, motions, ratios, day_seen=None, thu
             if ok:
                 found.append((stats["start"], stats["end"]))
         if not found and thumbs is not None:
-            found = find_grid(cap, fps, timestamps, thumbs, ratios, day_seen)
+            found = find_grid(cap, fps, timestamps, thumbs, ratios, sidebar_at)
     finally:
         cap.release()
     return found

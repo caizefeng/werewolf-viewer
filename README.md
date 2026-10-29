@@ -38,7 +38,7 @@ Two coverages are available from the controls bar:
 
 ### Reveal exactly what one player would know
 
-Hover the **ROLES** tab on the right edge. Everything starts blind.
+Hover the **ROLES** tab on the right edge, or tap it on a touch screen. Everything starts blind.
 
 - **By role** lists the roles in play with no seats shown. Clones are numbered (平民 1 … 4) in a random order fixed per game, so picking "平民 2" tells you nothing until you reveal it. Once revealed, the row says which seat that was.
 - **By seat** lists seats 1 to 12. Click one to open its mask.
@@ -89,6 +89,20 @@ A tab that has been open for a while can't overwrite newer data. If the game cha
 | `N` / `Shift+N` | Next / previous night |
 | `F` | Fullscreen (masks follow the letterboxed video) |
 | `B` | Bookmark the open game |
+
+### Phones and tablets
+
+The server listens on the whole local network, so a phone or tablet on the same Wi-Fi opens the viewer at the computer's address, port 5173.
+
+- **Holding a phone upright.** The controls sit under the video, so nothing covers it. The PHASES and ROLES panels sit below the player as part of the page, and *By seat* lays the twelve seats out as the broadcast does: 1 to 6 on the left, 7 to 12 on the right. Library and Search share a tab bar, and the Search tab shows how many jobs are running.
+- **Turned sideways, or on a tablet.** The panels slide out from the video's edges when you tap their tabs, and a tap anywhere else closes them. A tap on the video brings up the controls; once they show, a tap plays or pauses.
+- **Touch controls.** Drag the progress bar with a finger, or skip with the −10 / +10 buttons. *✎ Edit → Show edit handles* brings out the handles and × buttons that a mouse finds by hovering, so night phases and masks can be edited by touch too.
+- **Fullscreen keeps the masks.** An iPhone can make only a bare video fullscreen, in its own player, where neither the masks nor the night overlay can follow. So there the viewer fills the screen itself, and turning the phone sideways fills it with the video. Picture-in-picture and casting are switched off for the same reason: both would show the video unmasked. Added to the home screen, the viewer opens without Safari's toolbars.
+- **AV1 video.** Downloads are AV1, the format YouTube serves at 1080p60. Safari plays AV1 only on devices with an AV1 decoder (iPhone 15 Pro and later, Macs with an M3 or later), so an older iPhone shows a message that it can't play the video rather than a black box. Chrome, Firefox and Edge play it everywhere, Android phones included.
+
+| Upright | Sideways, fullscreen |
+|---|---|
+| <img src="docs/screenshots/phone.png" width="300" alt="An upright phone: the video with the controls below it, the PHASES and ROLES panels docked under the player, the wolf pack revealed"> | <img src="docs/screenshots/phone-sideways.png" width="560" alt="A phone on its side in fullscreen, the ROLES panel tapped open over the video"> |
 
 ## How it works
 
@@ -207,9 +221,10 @@ Browser end-to-end tests drive the real UI with Playwright against a throwaway s
 
 ```bash
 pip install -r tests/requirements.txt && playwright install chromium   # once, in processing/venv
-python3 tests/e2e/run.py              # player regression walk + bookmarks/resume suite
+python3 tests/e2e/run.py              # player regression walk, bookmarks/resume, phones and tablets
 python3 tests/e2e/run.py bookmarks    # one suite
 python3 tests/e2e/run.py --fresh      # re-analyse the demo games first (after pipeline changes)
+python3 tests/e2e/run.py mobile --webkit   # phones and tablets on WebKit, Safari's engine (playwright install webkit)
 ```
 
 ## Project structure

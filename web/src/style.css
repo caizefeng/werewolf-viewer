@@ -572,7 +572,10 @@ body.instance-dev {
   overflow: hidden;
   flex: 1;
   min-width: 0;
-  animation: fadeIn 0.5s ease-out 0.1s both;
+  /* backwards, not both: an animation that keeps filling its transform
+     makes the card the containing block of the fullscreen stand-in
+     (position: fixed), which then shrinks to the card */
+  animation: fadeIn 0.5s ease-out 0.1s backwards;
 }
 
 /* ── Video wrapper ── */
@@ -581,6 +584,13 @@ body.instance-dev {
   width: 100%;
   background: #000;
   cursor: pointer;
+  /* the closed PHASES / ROLES panels wait just outside its edges (only
+     their tabs show); when the video is narrower than the card (a phone
+     on its side) the card no longer hides them. clip, not hidden: the Full
+     masks overshoot the right edge by 2px, and a hidden overflow would be
+     a scroll container that a tap's scroll-into-view shifts by those 2px */
+  overflow: hidden;
+  overflow: clip;
 }
 
 #video-wrapper.controls-visible {
@@ -777,6 +787,7 @@ body.instance-dev {
   width: 16px;
   height: 100%;
   pointer-events: auto;
+  cursor: ew-resize;                  /* the zone is what a press grabs */
 }
 
 .name-mask .mask-hover-zone.zone-right {
@@ -923,12 +934,26 @@ body.instance-dev {
   transition: opacity 0.2s ease;
 }
 
-#night-jump-buttons:hover {
+/* A mouse opens the panel by hovering it; a finger taps its tab (.open,
+   player.js), and taps outside to close it. Touch screens never match
+   :hover here: their emulated hover sticks after a tap */
+@media (hover: hover) {
+  #night-jump-buttons:hover {
+    transform: translateY(-50%) translateX(0);
+  }
+
+  #night-jump-buttons:hover::after {
+    opacity: 0;
+  }
+}
+
+#night-jump-buttons.open {
   transform: translateY(-50%) translateX(0);
 }
 
-#night-jump-buttons:hover::after {
+#night-jump-buttons.open::after {
   opacity: 0;
+  pointer-events: none;
 }
 
 /* Phase row: number + start + end buttons */
@@ -1420,12 +1445,23 @@ body.instance-dev {
   transition: opacity 0.2s ease;
 }
 
-#role-panel:hover {
+@media (hover: hover) {
+  #role-panel:hover {
+    transform: translateY(-50%) translateX(0);
+  }
+
+  #role-panel:hover::after {
+    opacity: 0;
+  }
+}
+
+#role-panel.open {
   transform: translateY(-50%) translateX(0);
 }
 
-#role-panel:hover::after {
+#role-panel.open::after {
   opacity: 0;
+  pointer-events: none;
 }
 
 .rp-header {
@@ -1942,4 +1978,764 @@ body.instance-dev {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Phones, tablets and touch screens (2026-10-28)
+   Layouts by viewport width:
+   - 1280px and up: the three columns above (library | player | search)
+   - 700-1279px: the player across the top, library and search side by
+     side below it
+   - under 700px (phones): the player, then Library / Search tabs showing
+     one list at a time. The controls sit below the video instead of over
+     it, and the PHASES / ROLES panels below the player (player.js docks
+     them there while it is not fullscreen)
+   Touch behaviour keys on (hover: none) / (pointer: coarse), not on width.
+   ════════════════════════════════════════════════════════════════════════ */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+button,
+input,
+#video-wrapper {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;          /* no double-tap zoom on quick taps */
+}
+
+/* Only touch screens or phone layouts show these */
+.skip-btn,
+.touch-only,
+#pane-tabs,
+#player-dock {
+  display: none;
+}
+
+/* ── Fullscreen: the browser's own (.is-fs), or where a page cannot ask
+   for it (iPhone Safari) the wrapper fixed over the screen (.pseudo-fs,
+   also .is-fs). A long press must not offer the bare video either ── */
+#video-wrapper {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#video-wrapper.pseudo-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  max-width: none;
+  margin: 0;
+  background: #000;
+  touch-action: none;                 /* a swipe must not scroll the page under it */
+}
+
+/* the role list scrolls on its own, never the page behind it */
+.rp-body {
+  overscroll-behavior: contain;
+}
+
+#video-wrapper.pseudo-fs #video {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
+
+/* A fixed element is placed against its nearest ancestor with a transform
+   or a backdrop filter, not against the screen: the player card has both
+   (its fade-in keeps translateY(0); !important beats an animation's fill) */
+html.pseudo-fs #player-container {
+  transform: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.pseudo-fs,
+html.pseudo-fs body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Controls and panel tabs stay clear of a notch and the home indicator */
+#video-wrapper.is-fs #custom-controls {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+#video-wrapper.is-fs #night-jump-buttons {
+  left: env(safe-area-inset-left);
+}
+
+#video-wrapper.is-fs #role-panel {
+  right: env(safe-area-inset-right);
+}
+
+/* ── The controls bar follows the player's own width (container queries):
+   tighter under 760px, two lines at 560px and under ── */
+#video-wrapper {
+  container: player / inline-size;
+}
+
+@container player (width <= 760px) {
+  #controls-row {
+    gap: 0.4rem;
+    padding: 0.45rem 0.6rem;
+  }
+
+  #toggle-masks,
+  #mask-mode-btn,
+  #edit-menu-btn {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.74rem;
+  }
+
+  #time-display {
+    min-width: 0;
+    font-size: 0.74rem;
+  }
+
+  #volume-slider {
+    width: 56px;
+  }
+
+  .indicator {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.72rem;
+  }
+
+  #time-display {
+    white-space: nowrap;
+  }
+
+  #toggle-masks .mask-note {
+    display: none;
+  }
+
+  /* the Edit menu opens leftwards: its button sits near the right edge */
+  #edit-menu {
+    left: auto;
+    right: 0;
+  }
+}
+
+/* One line down to just over 560px (widths are fractional: the ranges
+   meet exactly). A phone on its side lands near 600px; with the total
+   time and the chip's word gone an hour-long game still fits (~550px) */
+@container player (560px < width <= 700px) {
+  #time-display .t-dur,
+  #phase-indicator .ind-label {
+    display: none;
+  }
+}
+
+/* Two lines below that; on the smallest phones the total goes too */
+@container player (width <= 360px) {
+  #time-display .t-dur {
+    display: none;
+  }
+}
+
+@container player (width <= 560px) {
+  /* line 1: playback; line 2: masks, phase, edit. The ::after is a
+     zero-height line break between them */
+  #controls-row {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  #controls-row::after {
+    content: "";
+    order: 8;
+    flex-basis: 100%;
+  }
+
+  #play-btn { order: 1; }
+  #back-btn { order: 2; }
+  #fwd-btn { order: 3; }
+  #time-display { order: 4; }
+  #controls-row .spacer { order: 5; }
+  #mute-btn,
+  #volume-slider { order: 6; }
+  #fullscreen-btn { order: 7; }
+
+  #toggle-masks,
+  #mask-mode-btn,
+  #phase-indicator,
+  #edit-menu-wrap {
+    order: 9;
+    margin-top: 0.45rem;
+  }
+}
+
+/* ── Touch screens ── */
+@media (pointer: coarse) {
+  /* iOS does not let a page set the volume, and phones have keys for it */
+  #volume-slider {
+    display: none;
+  }
+
+  .skip-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.6em;
+    padding: 0 0.45rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* targets a finger can hit: 34px and up */
+  #controls-row .ctrl-btn {
+    min-height: 34px;
+  }
+
+  #play-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  #mute-btn,
+  #fullscreen-btn {
+    min-width: 38px;
+  }
+
+  /* a finger needs more than a 4px bar: a taller hit area, a thicker bar
+     and a knob; drags must not scroll the page */
+  #progress-container {
+    padding: 10px 0.75rem;
+    touch-action: none;
+  }
+
+  #progress-bar,
+  #progress-container:hover #progress-bar {
+    height: 6px;
+  }
+
+  #progress-played::after {
+    content: "";
+    position: absolute;
+    z-index: 3;                       /* above the phase markers */
+    top: 50%;
+    right: -7px;
+    width: 14px;
+    height: 14px;
+    margin-top: -7px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(133, 120, 246, 0.35), 0 1px 4px rgba(0, 0, 0, 0.5);
+  }
+
+  /* iOS zooms the page into any focused field under 16px */
+  #search-input {
+    font-size: 16px;
+  }
+
+  #search-btn,
+  .search-item .sr-actions button {
+    padding: 0.45rem 0.85rem;
+    font-size: 0.8rem;
+  }
+
+  .sidebar-panel-header .ctrl-btn {
+    min-width: 34px;
+    min-height: 32px;
+    font-size: 0.9rem;
+  }
+
+  .menu-btn {
+    padding: 0.7rem 0.8rem;
+    font-size: 0.9rem;
+  }
+
+  .rp-row {
+    min-height: 34px;
+    padding: 5px 8px;
+    font-size: 0.8rem;
+  }
+
+  .rp-btn {
+    padding: 5px 11px;
+    font-size: 0.72rem;
+  }
+
+  .rp-mode-btn {
+    padding: 7px 8px;
+    font-size: 0.72rem;
+  }
+
+  #night-jump-buttons {
+    gap: 8px;
+  }
+
+  .night-jump-group,
+  .card-jump-group {
+    gap: 6px;
+  }
+
+  .night-jump-btn,
+  .card-jump-btn {
+    padding: 7px 10px;
+    font-size: 0.78rem;
+  }
+
+  .night-jump-label {
+    width: 16px;
+    font-size: 0.72rem;
+  }
+}
+
+@media (hover: none) {
+  .touch-only {
+    display: revert;
+  }
+
+  /* hover never ends on a touch screen: no lift that sticks */
+  .ctrl-btn:hover,
+  .sr-btn-dl:hover,
+  .night-jump-btn:hover,
+  .card-jump-btn:hover {
+    transform: none;
+  }
+
+  /* The panel tabs are what a finger taps (the invisible hover strips
+     beside them would swallow taps meant for the video) */
+  #night-jump-buttons::before,
+  #role-panel::before {
+    display: none;
+  }
+
+  #night-jump-buttons::after,
+  #role-panel::after {
+    padding: 18px 7px;
+    font-size: 11px;
+  }
+
+  /* Library rows: the ↻ and × have no hover to appear on */
+  .video-star {
+    width: 32px;
+    height: 32px;
+    font-size: 17px;
+  }
+
+  .video-del-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+    opacity: 0.6;
+  }
+
+  .video-progress {
+    left: calc(0.55rem + 33px + 0.3rem + 3px);
+  }
+
+  /* Editing on the video: hidden unless ✎ Edit > Show edit handles is on
+     (.editing), then large enough for a finger. An invisible × at the top
+     of a mask, or above a night marker, must not remove it on a tap */
+  #video-wrapper:not(.editing) .mask-delete-btn,
+  #video-wrapper:not(.editing) .mask-hover-zone,
+  #video-wrapper:not(.editing) .night-handle,
+  #video-wrapper:not(.editing) .remove-phase {
+    display: none;
+  }
+
+  #video-wrapper.editing .mask-delete-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
+    opacity: 1;
+  }
+
+  #video-wrapper.editing .mask-hover-zone {
+    width: 30px;
+    touch-action: none;               /* a sideways drag is a resize, not a pan */
+  }
+
+  #video-wrapper.editing .resize-handle {
+    left: 50%;
+    right: auto;
+    width: 8px;
+    margin-left: -4px;
+    opacity: 0.85;
+  }
+
+  #video-wrapper.editing .night-handle {
+    top: -9px;
+    width: 14px;
+    height: calc(100% + 18px);
+    opacity: 1;
+  }
+
+  #video-wrapper.editing .night-handle.handle-start {
+    left: -7px;
+  }
+
+  #video-wrapper.editing .night-handle.handle-end {
+    right: -7px;
+  }
+
+  #video-wrapper.editing .remove-phase {
+    top: -34px;
+    width: 26px;
+    height: 26px;
+    font-size: 14px;
+    opacity: 1;
+  }
+
+  /* iOS ignores background-attachment: fixed (it would cover the whole
+     page height, zoomed): draw the backdrop on the fixed layer instead */
+  body {
+    background-image: none;
+  }
+
+  body::before {
+    inset: -40px;                     /* the blur fades its own edges */
+    background:
+      linear-gradient(rgba(12, 11, 20, 0.4), rgba(12, 11, 20, 0.4)),
+      url("/background.png") center top / cover no-repeat;
+    filter: blur(14px) saturate(1.3);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* ── Tablets, phones on their side, narrow windows (under 1280px, where
+   the middle column would leave the player under 700px) ── */
+@media (max-width: 1279px) {
+  #main-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "player player"
+      "library search";
+    align-items: start;
+  }
+
+  #player-container {
+    grid-area: player;
+  }
+
+  #sidebar-left {
+    grid-area: library;
+  }
+
+  #sidebar-right {
+    grid-area: search;
+  }
+
+  /* the lists take their own height and the page scrolls */
+  .sidebar-panel {
+    width: auto;
+    height: auto;
+    max-height: none;
+  }
+
+  /* the header (about 6.5rem) and the video fit one screen */
+  #video-wrapper {
+    max-width: calc((100vh - 7rem) * var(--video-aspect, 16 / 9));
+    max-width: calc((100svh - 7rem) * var(--video-aspect, 16 / 9));
+    margin-inline: auto;
+  }
+}
+
+@media (max-height: 500px) and (orientation: landscape) {
+  #app {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+
+  /* the compact header (about 2.6rem) and the video share one screen */
+  #video-wrapper {
+    max-width: calc((100vh - 3.25rem) * var(--video-aspect, 16 / 9));
+    max-width: calc((100svh - 3.25rem) * var(--video-aspect, 16 / 9));
+  }
+
+  header {
+    margin-bottom: 0.5rem;
+    padding-top: 0;
+  }
+
+  header h1 {
+    font-size: 1.15rem;
+    letter-spacing: 0.14em;
+  }
+
+  header h1::after {
+    margin-top: 0.3rem;
+  }
+}
+
+/* ── Phones (under 700px) ── */
+@media (max-width: 699px) {
+  #app {
+    padding:
+      max(0.6rem, env(safe-area-inset-top))
+      max(0.5rem, env(safe-area-inset-right))
+      max(1.25rem, env(safe-area-inset-bottom))
+      max(0.5rem, env(safe-area-inset-left));
+  }
+
+  header {
+    margin-bottom: 0.6rem;
+    padding-top: 0;
+  }
+
+  header h1 {
+    font-size: 1.3rem;
+    letter-spacing: 0.14em;
+  }
+
+  header h1::after {
+    margin-top: 0.35rem;
+  }
+
+  #main-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "player"
+      "tabs"
+      "pane";
+    gap: 0.6rem;
+  }
+
+  #sidebar-left,
+  #sidebar-right {
+    grid-area: pane;
+  }
+
+  #main-layout[data-pane="library"] #sidebar-right,
+  #main-layout[data-pane="search"] #sidebar-left {
+    display: none;
+  }
+
+  #player-container {
+    border-radius: var(--radius);
+  }
+
+  #info-bar {
+    flex-wrap: wrap;
+    gap: 0.3rem 0.75rem;
+    padding: 0.55rem 0.75rem;
+  }
+
+  .info-title {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+
+  .video-title-label {
+    font-size: 0.82rem;
+  }
+
+  /* long messages (a video this browser can't play) wrap here */
+  #info-bar .status {
+    flex: 1 1 0;
+    font-size: 0.72rem;
+    white-space: normal;
+  }
+
+  /* Library / Search tabs */
+  #pane-tabs {
+    grid-area: tabs;
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: var(--bg-surface);
+    backdrop-filter: blur(18px) saturate(1.2);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+  }
+
+  .pane-tab {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    min-height: 38px;
+    padding: 0.5rem;
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-tertiary);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .pane-tab.active {
+    background: var(--accent-dim);
+    color: var(--text-primary);
+    box-shadow: inset 0 0 0 1px var(--accent-medium);
+  }
+
+  .pane-tab-count {
+    min-width: 1.4em;
+    padding: 0.1rem 0.35rem;
+    border-radius: 999px;
+    background: var(--dawn-dim);
+    border: 1px solid rgba(217, 173, 66, 0.35);
+    color: var(--dawn-gold);
+    font-size: 0.66rem;
+    letter-spacing: 0;
+  }
+
+  .pane-tab-count[hidden] {
+    display: none;
+  }
+
+  /* Lists: larger rows; the page scrolls, not the list */
+  #video-list,
+  #search-results {
+    overflow: visible;
+  }
+
+  #video-list li {
+    font-size: 0.88rem;
+    padding: 0.7rem 0.75rem;
+  }
+
+  #video-list li.lib-item {
+    padding-left: 0.5rem;
+  }
+
+  .lib-group-name {
+    font-size: 0.84rem;
+  }
+
+  .lib-group-date,
+  .lib-group-count,
+  .lib-group-stars {
+    font-size: 0.74rem;
+  }
+
+  .video-resume {
+    font-size: 0.72rem;
+  }
+
+  .search-item {
+    padding: 0.7rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .search-item .sr-meta {
+    font-size: 0.75rem;
+  }
+
+}
+
+/* ── Phones held upright (player.js DOCK_QUERY): the controls below the
+   video, the PHASES / ROLES panels below the player. A phone on its side
+   keeps the overlaid controls and panels, with the video fitted to the
+   screen height ── */
+@media (max-width: 699px) and (orientation: portrait) {
+  /* Controls below the video, always shown: nothing covers a small video,
+     and nothing needs a tap to appear first */
+  #video-wrapper:not(.is-fs) #custom-controls {
+    position: relative;
+    opacity: 1;
+    pointer-events: auto;
+    padding: 0.25rem 0 0;
+    background: rgba(9, 8, 16, 0.9);
+  }
+
+  /* ...so the overlays cover the video only, not the bar below it */
+  #video-wrapper:not(.is-fs) > #night-overlay,
+  #video-wrapper:not(.is-fs) > #name-masks {
+    height: auto;
+    aspect-ratio: var(--video-aspect, 16 / 9);
+  }
+
+  /* The PHASES and ROLES panels, docked below the player */
+  #player-dock {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 0.75rem 0.75rem 0.85rem;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  #player-dock:not(:has(> #role-panel:not(.hidden), > #night-jump-buttons:not(:empty))) {
+    display: none;
+  }
+
+  #player-dock > #night-jump-buttons,
+  #player-dock > #role-panel {
+    position: static;
+    transform: none;
+    width: auto;
+    max-height: none;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    transition: none;
+  }
+
+  #player-dock > #night-jump-buttons {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+  }
+
+  #player-dock > #night-jump-buttons::before {
+    content: "Phases";
+    display: block;
+    position: static;
+    flex-basis: 100%;
+    width: auto;
+    height: auto;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  #player-dock > #night-jump-buttons::after,
+  #player-dock > #role-panel::before,
+  #player-dock > #role-panel::after {
+    display: none;
+  }
+
+  #player-dock .rp-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 6px;
+    overflow: visible;
+  }
+
+  /* By seat: seats 1-6 down the left column, 7-12 down the right, as the
+     broadcast's two sidebars have them */
+  #player-dock .rp-body.rp-by-seat {
+    grid-auto-flow: column;
+    grid-template-rows: repeat(6, auto);
+  }
+
+  #player-dock .rp-row {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-subtle);
+  }
+
+  #player-dock .rp-row.revealed {
+    background: var(--accent-dim);
+    border-color: var(--accent-medium);
+  }
+
+  #player-dock .rp-row.rp-wolf.revealed {
+    border-color: rgba(224, 72, 72, 0.35);
+  }
+
+  #player-dock .rp-modes {
+    margin: 2px 0 4px;
+  }
 }

@@ -17,6 +17,15 @@ from harness import (CHROMIUM_ARGS, DEMO_IDS, G1, G2, G3, ROOT, api, demo_server
 
 OUT = ROOT / "docs" / "screenshots"
 DAY, NIGHT = 210, 300   # demo game 1: day 2 (3:30) and night 2 (5:00)
+PHONE = dict(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True, device_scale_factor=2)
+PHONE_SIDEWAYS = dict(viewport={"width": 844, "height": 390}, has_touch=True, is_mobile=True, device_scale_factor=2)
+# iPhone Safari has no Fullscreen API for the page: the viewer stands in
+NO_FULLSCREEN_API = """
+for (const name of ["requestFullscreen", "webkitRequestFullscreen"]) {
+  Object.defineProperty(Element.prototype, name, {value: undefined, configurable: true});
+}
+Object.defineProperty(Document.prototype, "fullscreenEnabled", {get: () => false, configurable: true});
+"""
 
 
 def _save(png, name, width=1400):
@@ -30,7 +39,7 @@ def _save(png, name, width=1400):
     log(f"{name}.png {im.size[0]}x{im.size[1]}")
 
 
-def _shoot(pg, name, clip_player=False):
+def _shoot(pg, name, clip_player=False, width=1400):
     tmp = OUT / f".{name}.raw.png"
     if clip_player:
         r = pg.evaluate("(() => { const b = document.getElementById('player-container').getBoundingClientRect();"
@@ -38,7 +47,7 @@ def _shoot(pg, name, clip_player=False):
         pg.screenshot(path=str(tmp), clip=r)
     else:
         pg.screenshot(path=str(tmp))
-    _save(tmp, name)
+    _save(tmp, name, width)
     tmp.unlink()
 
 
@@ -54,8 +63,10 @@ def _seek(pg, t):
     pg.wait_for_timeout(1200)
 
 
-def _page(browser, base):
-    ctx = browser.new_context(viewport={"width": 1600, "height": 1000}, device_scale_factor=2)
+def _page(browser, base, context=None, init_script=None):
+    ctx = browser.new_context(**(context or {"viewport": {"width": 1600, "height": 1000}, "device_scale_factor": 2}))
+    if init_script:
+        ctx.add_init_script(init_script)
     pg = ctx.new_page()
     pg.on("dialog", lambda d: d.accept())
     open_app(pg, base)
@@ -172,8 +183,37 @@ def jobs(browser, base, run_dir):
     _shoot(pg, "jobs")
 
 
+def phone(browser, base, run_dir):
+    """An upright phone: the controls under the video, the PHASES and ROLES
+    panels docked below the player, the wolf pack revealed By role."""
+    pg = _page(browser, base, PHONE)
+    _seek(pg, DAY)
+    pg.tap("#role-panel .rp-modes .rp-mode-btn:nth-child(1)")
+    pg.tap("#role-panel .rp-body .rp-row.rp-wolf")
+    pg.wait_for_timeout(700)
+    pg.evaluate("window.scrollTo(0, 0)")
+    pg.wait_for_timeout(300)
+    _shoot(pg, "phone", width=780)
+
+
+def phone_sideways(browser, base, run_dir):
+    """A phone on its side in fullscreen (the iPhone stand-in), its ROLES
+    panel tapped open."""
+    pg = _page(browser, base, PHONE_SIDEWAYS, NO_FULLSCREEN_API)
+    _seek(pg, DAY)
+    pg.tap("#video")                               # a first tap brings up the controls
+    pg.tap("#fullscreen-btn")
+    pg.wait_for_timeout(800)
+    b = pg.evaluate("(() => { const r = document.getElementById('role-panel').getBoundingClientRect();"
+                    " return [r.x, r.y + r.height / 2]; })()")
+    pg.touchscreen.tap(b[0] - 10, b[1])             # its tab, just inside the video's edge
+    pg.wait_for_timeout(800)
+    _shoot(pg, "phone-sideways", width=1200)
+
+
 SHOTS = {"overview": overview, "night": night, "mask-roles-mode": mask_roles_mode, "reveal-role": reveal_role,
-         "reveal-seat": reveal_seat, "hidden-roles": hidden_roles, "edit-menu": edit_menu, "jobs": jobs}
+         "reveal-seat": reveal_seat, "hidden-roles": hidden_roles, "edit-menu": edit_menu, "jobs": jobs,
+         "phone": phone, "phone-sideways": phone_sideways}
 
 
 def main():

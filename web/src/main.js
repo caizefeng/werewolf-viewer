@@ -34,7 +34,25 @@ function getElements() {
     resetNightsBtn: document.getElementById("reset-nights-btn"),
     nightJumpButtons: document.getElementById("night-jump-buttons"),
     rolePanel: document.getElementById("role-panel"),
+    controls: document.getElementById("custom-controls"),
+    backBtn: document.getElementById("back-btn"),
+    fwdBtn: document.getElementById("fwd-btn"),
+    editHandlesBtn: document.getElementById("edit-handles-btn"),
+    dock: document.getElementById("player-dock"),
   };
+}
+
+// Phones (style.css "Phones") stack the player, the Library / Search tabs
+// and one list. Keep in step with the CSS (and DOCK_QUERY in player.js).
+const PHONE_QUERY = "(max-width: 699px)";
+
+function setPane(pane) {
+  document.getElementById("main-layout").dataset.pane = pane;
+  document.querySelectorAll("#pane-tabs .pane-tab").forEach((tab) => {
+    const on = tab.dataset.pane === pane;
+    tab.classList.toggle("active", on);
+    tab.setAttribute("aria-pressed", String(on));
+  });
 }
 
 // ── Video list tab ──
@@ -433,7 +451,15 @@ async function loadVideoList() {
         }
         li.appendChild(reBtn);
         li.appendChild(delBtn);
-        li.addEventListener("click", () => switchVideo(v.id));
+        li.addEventListener("click", () => {
+          switchVideo(v.id);
+          // a phone's library sits below the player: bring the player back.
+          // Not smoothly: loading the game changes the page's height, which
+          // makes Safari abandon a smooth scroll halfway
+          if (window.matchMedia(PHONE_QUERY).matches) {
+            document.getElementById("player-container").scrollIntoView({ block: "start" });
+          }
+        });
         list.appendChild(li);
         renderRowState(li);
       }
@@ -848,6 +874,12 @@ async function pollJobs() {
   for (const id of [...jobSnapshot.keys()]) {
     if (!seen.has(id)) jobSnapshot.delete(id); // the server has forgotten it
   }
+  // A phone shows one list at a time: the Search tab counts running jobs
+  const running = data.jobs.filter((j) => j.active).length;
+  const count = document.getElementById("jobs-count");
+  count.hidden = !running;
+  count.textContent = running ? String(running) : "";
+  count.title = running ? `${running} download${running === 1 ? "" : "s"} or analys${running === 1 ? "is" : "es"} in progress` : "";
   jobsEverPolled = true;
   for (const job of finished) await onJobFinished(job);
   if (!data.jobs.some((j) => j.active)) stopJobPolling();
@@ -1020,6 +1052,12 @@ async function init() {
 
   // Refresh button
   document.getElementById("refresh-list").addEventListener("click", loadVideoList);
+
+  // Library / Search tabs (phones)
+  document.getElementById("pane-tabs").addEventListener("click", (e) => {
+    const tab = e.target.closest(".pane-tab");
+    if (tab) setPane(tab.dataset.pane);
+  });
 
   // Search button + Enter key
   document.getElementById("search-btn").addEventListener("click", doSearch);

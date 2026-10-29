@@ -44,16 +44,17 @@ werewolf_viewer/
 │       └── viewer_state.json  # {bookmarked, position, duration, ...} bookmark + resume point
 ├── tests/                 # Browser end-to-end tests on the synthetic demo library
 │   ├── requirements.txt   # playwright
-│   └── e2e/               # harness.py, run.py, test_player.py, test_bookmarks.py, readme_screenshots.py
+│   └── e2e/               # harness.py, run.py, test_player.py, test_bookmarks.py, test_mobile.py, readme_screenshots.py
 └── web/                   # Vite + vanilla JS frontend
     ├── .node-version      # v24.14.0 (used by fnm)
     ├── package.json       # packageManager field pins pnpm version for corepack
     ├── vite.config.js     # Dev server + video file serving middleware
     ├── index.html
+    ├── public/            # favicons, background.png, manifest.webmanifest (home-screen app)
     └── src/
-        ├── main.js        # App initialization, video list sidebar
-        ├── player.js      # WerewolfPlayer class (custom controls, masks, overlays)
-        └── style.css
+        ├── main.js        # App initialization, video list sidebar, phone list tabs
+        ├── player.js      # WerewolfPlayer class (custom controls, masks, overlays, touch, fullscreen)
+        └── style.css      # ends with the phone / tablet / touch section
 ```
 
 ## Environment Setup
@@ -674,10 +675,82 @@ The user watches games on the server while development goes on, so there are two
   separately from the night auto-mute: dawn only unmutes if the user didn't mute, and
   unmuting during a night phase (masks on) takes effect at dawn rather than immediately
 - Keyboard: Space=play, M=masks, F=fullscreen, arrows=±5s, N=next night start, Shift+N=previous,
-  B=bookmark the open game
+  B=bookmark the open game, Escape=leave the fullscreen stand-in (below)
+
+### Phones, tablets and touch (2026-10-28)
+User request: "Now this project can only be viewed normally on desktop size and ratio screens/browsers, I
+want you to make it mobile-compatible". Before, a 390px phone squeezed the player to zero width between
+the two 260px sidebars and the page zoomed out to 571px. All of it lives at the end of style.css plus
+player.js / main.js; the desktop at 1600x1000 is pixel-identical to before (1366: one row of the video's
+bottom edge differs by < 24 levels).
+- **Layouts by viewport width**: >= 1280px the three columns (below that the middle column would leave
+  the player under 700px); 700-1279px a grid with the player across the top and library + search side
+  by side below (`.sidebar-panel` height auto, the page scrolls; the video capped at
+  `(100svh - 7rem) * aspect` so header + video fit one screen; a phone on its side, max-height 500px
+  landscape, gets a compact header and `(100svh - 3.25rem)`); < 700px (PHONE_QUERY, main.js) one column:
+  player, `#pane-tabs` (Library / Search, `data-pane` on #main-layout, the Search tab counts running
+  jobs from pollJobs) and one list. Picking a game there jumps back to the player, instantly: loading the
+  game changes the page height, and WebKit abandons a smooth scroll when that clamps the position
+- **Upright phones** (`(max-width: 699px) and (orientation: portrait)`, DOCK_QUERY in player.js, the
+  same query in style.css): the controls sit below the video, always shown (#night-overlay and
+  #name-masks then size themselves to the video by aspect-ratio, not to the wrapper), and
+  `_placePanels` moves #night-jump-buttons and #role-panel into `#player-dock` under the info bar
+  (back onto the video in fullscreen and other layouts; the matchMedia change event re-places them).
+  Docked By seat is a grid flowing 1-6 down the left column, 7-12 down the right (`.rp-by-seat`)
+- **The controls bar follows the player's width** (container queries; #video-wrapper is `container:
+  player / inline-size`): <= 760px tighter, the ✎ Edit menu opens leftwards, a hidden-roles game drops
+  "(hidden roles)" from its mask button; 560-700px the time drops " / total" and the day/night chip its
+  word (an hour-long game's controls still fit one line, ~550px); <= 560px two lines (flex-wrap, `order`,
+  a zero-height `::after` line break); <= 360px the total goes too. `setParts` writes those labels as
+  spans, so textContent (which the tests read) is unchanged. Range syntax (`560px < width <= 700px`)
+  because widths are fractional: a phone on its side measured 600.9px, between "<= 600" and ">= 601"
+- **Touch** keys on `(hover: none)` / `(pointer: coarse)`, not width: −10/+10 buttons, no volume
+  slider (iOS ignores one), 34px+ targets, the progress bar with a 10px-padded hit area, a knob and
+  `touch-action: none`, the search field at 16px (iOS zooms into smaller ones), the library's ↻/× shown
+  at 0.6 opacity, the panels' invisible hover strips removed (their tabs grow). Panels open on hover only
+  under `(hover: hover)`: a touch screen's emulated hover sticks
+- **Pointer events** for every drag (mouse and finger alike): the progress seek (pointer captured by the
+  bar), night handles (captured; the marker moves in place, since rebuilding the markers mid-drag removed
+  the handle holding the capture; a press without movement no longer saves), mask resizing (grabbed by
+  the hover zone, `touch-action: none` there while editing or a sideways drag pans; geometry relative to
+  #name-masks, which also fixed resizing in fullscreen with letterboxing). The × on a night marker stops its pointerdown: the bar would capture the pointer and
+  the click would go to the bar
+- **Taps** (`_onPlayerPress`, capture phase, records pointerType and whether the controls were up): a
+  touch tap on the video while overlaid controls are hidden only shows them; a panel opens on a tap whose
+  target is the panel itself (its ::after tab) -- clicks bubbling up from its buttons must not reopen it
+  (a jump button closes it); a press outside closes it (`_closePanelsOutside`), and one on the video
+  that closed a panel does not also play/pause. Playing starts the hide timer (no mouse move follows a
+  tap on play). On touch the hover-revealed × and handles on masks and markers are `display: none` (an
+  invisible × at the top of a mask removed it on a tap); ✎ Edit > Show edit handles (touch-only item,
+  `.editing` on the wrapper) shows them large, and the controls stay up while editing
+- **Fullscreen** (`_isFullscreen`: the API, webkit-prefixed too, or the stand-in): iPhone Safari (and
+  Playwright's WebKit) has no Fullscreen API for elements, only `video.webkitEnterFullscreen`, whose
+  player shows the video unmasked; there, and when a request is refused, `.pseudo-fs` fixes the
+  wrapper over the screen (html overflow hidden, touch-action none) and the masks are fitted to the
+  letterboxed video as in real fullscreen. Android locks phones to landscape (try/catch). GOTCHA: a
+  fixed element is placed against its nearest ancestor with a transform, a backdrop-filter or a filling
+  transform animation, not the screen; #player-container had both (fadeIn with fill `both`), so the
+  stand-in shrank to the card. Its animation fill is now `backwards`, and `html.pseudo-fs` removes its
+  backdrop-filter
+- #video-wrapper clips its content (the closed panels wait just outside its edges, which a wrapper
+  narrower than the card no longer hid) with `overflow: clip`, not hidden: the Full masks overshoot the
+  right edge by 2px, and a hidden overflow is a scroll container that a tap's scroll-into-view shifted
+- The video has `playsinline` (without it an iPhone plays it in its own fullscreen player: no masks, no
+  night overlay), `disablepictureinpicture`, `disableremoteplayback` and `x-webkit-airplay="deny"`
+  (picture-in-picture and casting would show it unmasked); the wrapper has `-webkit-touch-callout: none`
+- **AV1**: the library is AV1 1080p60 + Opus. Safari decodes AV1 only with an AV1 hardware decoder
+  (iPhone 15 Pro and later, M3 Macs and later); the `error` handler says so (canPlayType check) instead
+  of leaving a black box. H.264 downloads would play everywhere but change the pipeline: not done
+- Home screen: manifest.webmanifest + the apple-mobile-web-app meta tags (standalone, no Safari bars);
+  `viewport-fit=cover` with safe-area insets on #app and on the fullscreen controls and panel tabs. iOS
+  ignores `background-attachment: fixed`, so on `(hover: none)` the backdrop image is drawn on the
+  fixed `body::before` with a blur filter instead
+- Verified with Playwright's Chromium (mobile emulation) and WebKit (`run.py mobile --webkit`; WebKit is
+  in the Playwright cache since 2026-10-28); not on a real phone. GOTCHA: Playwright's `full_page`
+  screenshots drop the mobile emulation (hover/pointer media flip to desktop): shoot the viewport
 
 ## Browser tests (tests/e2e)
-- `processing/venv/bin/python3 tests/e2e/run.py [player|bookmarks] [--fresh]` (Playwright in
+- `processing/venv/bin/python3 tests/e2e/run.py [player|bookmarks|mobile] [--fresh] [--webkit]` (Playwright in
   processing/venv: `pip install -r tests/requirements.txt`). Each suite gets a **fresh copy of the
   synthetic demo library** and its own Vite server on a free port (127.0.0.1, `WEREWOLF_DEMO=1`,
   `WEREWOLF_VIDEOS_DIR`), so tests click, edit, bookmark, re-analyse and delete freely and never touch
@@ -693,7 +766,14 @@ The user watches games on the server while development goes on, so there are two
   stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
   saves, switch and tab-close saves, watched games, another device, touch, survival of
   re-analysis, deletion and re-download). The bookmark suite runs a re-analysis and a re-download,
-  so a full run takes several minutes
+  so a full run takes several minutes. `mobile` (2026-10-28, 51 checks, ~50 s): an upright phone
+  (layout order, no sideways scroll, inline-video attributes, controls below the video, overlays on the
+  video only, 34px targets, taps, ±10 s, a finger dragging the progress bar, docked panels, seat grid,
+  no invisible ×, Library/Search tabs, jump back to the player, a night handle and a mask edge dragged
+  by touch, browser fullscreen), an iPhone without the Fullscreen API (the stand-in, its panels and
+  taps), the phone turned sideways (one-line controls even for an hour-long game), a tablet, and a
+  1366 laptop without any of it. Touch drags are CDP touch events on Chromium; `--webkit` (for this
+  suite: the others expect Chromium's Fullscreen API) replays them as touch-type pointer events
 - **Run mutating UI tests here, not against the real server**: the earlier scratch walks used the
   real library and left `original_*` fields in metadata.json (which mark user corrections); the
   scratch scripts under /tmp were also purged by macOS after a few days, hence the move into the repo
@@ -721,8 +801,9 @@ The user watches games on the server while development goes on, so there are two
   info.json` and `catalogue.json` (gitignored)
 - `tests/e2e/readme_screenshots.py [NAME ...]` retakes the README screenshots (overview, night,
   mask-roles-mode, reveal-role, reveal-seat, hidden-roles, edit-menu, jobs) on throwaway demo
-  servers at 1600x1000, device scale 2, saved 1400 wide; bookmarks.png (a library crop) is not
-  covered
+  servers at 1600x1000, device scale 2, saved 1400 wide, plus phone (390x844, saved 780 wide) and
+  phone-sideways (844x390 in the fullscreen stand-in, saved 1200 wide); bookmarks.png (a library
+  crop) is not covered
 - Run the server with `WEREWOLF_DEMO=1` to make `/api/search` list the catalogue and downloads
   copy the rendered game in (`processing/demo/fake_download.py`, ~12s with progress); analysis
   then runs for real on the synthetic video. `WEREWOLF_VIDEOS_DIR=<dir>` points the server at

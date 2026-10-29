@@ -4,10 +4,13 @@
     processing/venv/bin/python3 tests/e2e/run.py              # every suite
     processing/venv/bin/python3 tests/e2e/run.py bookmarks    # one suite
     processing/venv/bin/python3 tests/e2e/run.py --fresh      # re-render/re-analyse the demo games
+    processing/venv/bin/python3 tests/e2e/run.py mobile --webkit   # phones on Safari's engine
 
 Needs Playwright in processing/venv (pip install -r tests/requirements.txt;
-playwright install chromium). Never touches videos/: every suite gets a fresh
-copy of the synthetic demo library and its own Vite server on a free port.
+playwright install chromium; playwright install webkit for --webkit). Never
+touches videos/: every suite gets a fresh copy of the synthetic demo library
+and its own Vite server on a free port. --webkit is for the mobile suite: the
+other two expect Chromium (its Fullscreen API, for one).
 """
 import argparse
 import importlib
@@ -18,13 +21,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import CHROMIUM_ARGS, Checks, demo_server, log, prepare_demo_library  # noqa: E402
 
-SUITES = ("player", "bookmarks")
+SUITES = ("player", "bookmarks", "mobile")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("suites", nargs="*", help=f"suites to run: {', '.join(SUITES)} (default: all)")
     ap.add_argument("--fresh", action="store_true", help="re-analyse the demo games first")
+    ap.add_argument("--webkit", action="store_true", help="run on WebKit (Safari's engine) instead of Chromium")
     args = ap.parse_args()
     unknown = [s for s in args.suites if s not in SUITES]
     if unknown:
@@ -35,7 +39,8 @@ def main():
     results = []
     t0 = time.time()
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+        browser = (p.webkit.launch(headless=True) if args.webkit
+                   else p.chromium.launch(headless=True, args=CHROMIUM_ARGS))
         for name in args.suites or SUITES:
             log(f"=== suite: {name} ===")
             checks = Checks(name)

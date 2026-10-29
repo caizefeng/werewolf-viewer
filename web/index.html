@@ -2,7 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover: the fullscreen player may use the whole screen
+         around a notch; the page pads itself with the safe-area insets -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c0b14" />
+    <!-- Added to a phone's home screen it opens without the browser bars -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Werewolf" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Werewolf Viewer</title>
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
@@ -23,7 +32,7 @@
         <h1>Werewolf Viewer</h1>
       </header>
 
-      <div id="main-layout">
+      <div id="main-layout" data-pane="library">
         <!-- Left sidebar: Library -->
         <aside id="sidebar-left" class="sidebar-panel">
           <div class="sidebar-panel-header">
@@ -38,7 +47,11 @@
 
       <div id="player-container">
         <div id="video-wrapper">
-          <video id="video" preload="metadata"></video>
+          <!-- playsinline: without it an iPhone plays the video in its own
+               fullscreen player, where no mask or night overlay can reach.
+               Picture-in-picture and casting would show it unmasked too. -->
+          <video id="video" preload="metadata" playsinline webkit-playsinline disablepictureinpicture
+                 disableremoteplayback x-webkit-airplay="deny"></video>
 
           <!-- Night phase overlay -->
           <div id="night-overlay" class="overlay hidden">
@@ -65,6 +78,8 @@
             </div>
             <div id="controls-row">
               <button id="play-btn" class="ctrl-btn" title="Play / Pause">▶</button>
+              <button id="back-btn" class="ctrl-btn skip-btn" type="button" title="Back 10 s" aria-label="Back 10 seconds">−10</button>
+              <button id="fwd-btn" class="ctrl-btn skip-btn" type="button" title="Forward 10 s" aria-label="Forward 10 seconds">+10</button>
               <span id="time-display">0:00 / 0:00</span>
               <button id="mute-btn" class="ctrl-btn" title="Mute">🔊</button>
               <input id="volume-slider" type="range" min="0" max="1" step="0.05" value="1" title="Volume" />
@@ -74,6 +89,8 @@
               <div id="edit-menu-wrap">
                 <button id="edit-menu-btn" class="ctrl-btn" title="Edit night phases and masks" aria-haspopup="true" aria-expanded="false">✎ Edit</button>
                 <div id="edit-menu" class="hidden" role="menu">
+                  <button id="edit-handles-btn" class="menu-btn touch-only" title="Show the drag handles and × buttons on the masks and night markers (a mouse shows them on hover)">Show edit handles</button>
+                  <div class="menu-sep touch-only"></div>
                   <button id="add-phase-btn" class="menu-btn" title="Add a night phase at the current time">+ Night phase</button>
                   <button id="add-mask-btn" class="menu-btn" title="Add a new name mask region">+ Mask</button>
                   <div class="menu-sep"></div>
@@ -98,7 +115,17 @@
             <button id="start-over-btn" class="resume-btn" type="button">Start over</button>
           </span>
         </div>
+
+        <!-- Phones: the PHASES and ROLES panels move here, below the player,
+             while it is not fullscreen (player.js _placePanels) -->
+        <div id="player-dock"></div>
       </div>
+
+        <!-- Phones: one list at a time below the player -->
+        <nav id="pane-tabs" aria-label="Lists">
+          <button type="button" class="pane-tab active" data-pane="library" aria-pressed="true">Library</button>
+          <button type="button" class="pane-tab" data-pane="search" aria-pressed="false">Search<span id="jobs-count" class="pane-tab-count" hidden></span></button>
+        </nav>
         <!-- Right sidebar: Search -->
         <aside id="sidebar-right" class="sidebar-panel">
           <div class="sidebar-panel-header">

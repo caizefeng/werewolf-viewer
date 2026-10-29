@@ -39,6 +39,23 @@ function revealBand(p) {
 }
 const REVEAL_MODE_KEY = "werewolf.revealMode"; // "player" | "role"
 
+// Phone layout (style.css "Phones"): the PHASES / ROLES panels dock below
+// the player there while it is not fullscreen. Keep in step with the CSS.
+const DOCK_QUERY = "(max-width: 699px) and (orientation: portrait)";
+
+// Write a control's label as parts; a part with a class can be hidden on a
+// narrow player (style.css container queries) while textContent reads the
+// whole label as before
+function setParts(el, parts) {
+  el.replaceChildren(...parts.map(([text, cls]) => {
+    if (!cls) return document.createTextNode(text);
+    const span = document.createElement("span");
+    span.className = cls;
+    span.textContent = text;
+    return span;
+  }));
+}
+
 export class WerewolfPlayer {
   constructor(elements) {
     this.video = elements.video;
@@ -65,6 +82,11 @@ export class WerewolfPlayer {
     this.resetNightsBtn = elements.resetNightsBtn;
     this.nightJumpButtons = elements.nightJumpButtons;
     this.rolePanel = elements.rolePanel;
+    this.controls = elements.controls;
+    this.backBtn = elements.backBtn;
+    this.fwdBtn = elements.fwdBtn;
+    this.editHandlesBtn = elements.editHandlesBtn;
+    this.dock = elements.dock;
 
     this.metadata = null;
     this.videoId = null;
@@ -81,10 +103,14 @@ export class WerewolfPlayer {
     this.userMuted = false; // mute requested by the user (vs. night auto-mute)
     this.hideTimer = null;
     this.isSeeking = false;
+    this._pointerType = "mouse";   // of the last press on the player
+    this._docked = false;          // panels below the player (phones)
+    this._dockQuery = window.matchMedia(DOCK_QUERY);
 
     this._bindEvents();
     this._updateMaskModeBtn();
     this._restoreVolume();
+    this._placePanels();
   }
 
   // ── Events ──
@@ -92,7 +118,12 @@ export class WerewolfPlayer {
   _bindEvents() {
     // Video events
     this.video.addEventListener("timeupdate", () => this._onTimeUpdate());
-    this.video.addEventListener("play", () => this._updatePlayBtn());
+    // playing starts the countdown that hides the controls (after a tap on
+    // play no mouse move follows to start it)
+    this.video.addEventListener("play", () => {
+      this._updatePlayBtn();
+      this._startHideTimer();
+    });
     this.video.addEventListener("pause", () => {
       this._updatePlayBtn();
       this._showControls();
@@ -115,9 +146,12 @@ export class WerewolfPlayer {
       this._updateMuteBtn();
     });
 
-    // Play/pause
+    // Play/pause (and the ±10 s buttons touch screens show)
     this.playBtn.addEventListener("click", () => this._togglePlay());
-    this.video.addEventListener("click", () => this._togglePlay());
+    this.video.addEventListener("click", () => this._onVideoClick());
+    this.backBtn?.addEventListener("click", () => this._skip(-10));
+    this.fwdBtn?.addEventListener("click", () => this._skip(10));
+    this.video.addEventListener("error", () => this._onVideoError());
 
     // Volume
     this.volumeSlider.addEventListener("input", () => {
@@ -132,10 +166,18 @@ export class WerewolfPlayer {
     // Mute toggle
     this.muteBtn.addEventListener("click", () => this.toggleMute());
 
-    // Progress bar seek
-    this.progressContainer.addEventListener("mousedown", (e) => this._startSeek(e));
-    document.addEventListener("mousemove", (e) => { if (this.isSeeking) this._doSeek(e); });
-    document.addEventListener("mouseup", () => { if (this.isSeeking) this._endSeek(); });
+    // Progress bar seek, by mouse or finger: pointer events, captured so a
+    // drag carries on outside the bar
+    this.progressContainer.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      try { this.progressContainer.setPointerCapture(e.pointerId); } catch {}
+      this._startSeek(e);
+    });
+    this.progressContainer.addEventListener("pointermove", (e) => { if (this.isSeeking) this._doSeek(e); });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+      this.progressContainer.addEventListener(type, () => { if (this.isSeeking) this._endSeek(); });
+    }
 
     // Mask toggle
     this.toggleBtn.addEventListener("click", () => this.toggleMasks());
@@ -144,7 +186,12 @@ export class WerewolfPlayer {
     // Fullscreen
     this.fullscreenBtn.addEventListener("click", () => this._toggleFullscreen());
     document.addEventListener("fullscreenchange", () => this._onFullscreenChange());
+    document.addEventListener("webkitfullscreenchange", () => this._onFullscreenChange());
+    // the prefixed request returns no promise: a refusal arrives as an event
+    document.addEventListener("webkitfullscreenerror", () => this._setPseudoFullscreen(true));
     window.addEventListener("resize", () => this._fitMasksToVideo());
+    // a phone turning round resizes the player without a fullscreen change
+    new ResizeObserver(() => this._fitMasksToVideo()).observe(this.wrapper);
 
     // Add night phase
     this.addPhaseBtn.addEventListener("click", () => this._addNightPhase());
@@ -156,8 +203,11 @@ export class WerewolfPlayer {
     this.resetMasksBtn.addEventListener("click", () => this._resetMasks());
     this.resetNightsBtn.addEventListener("click", () => this._resetNightPhases());
 
-    // Controls show/hide
-    this.wrapper.addEventListener("mousemove", () => this._showControls());
+    // Controls show/hide: a mouse shows them by moving; a touch screen by a
+    // tap (_onVideoClick). Every press on the player keeps them up longer.
+    this.wrapper.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") this._showControls(); });
+    this.wrapper.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") this._startHideTimer(); });
+    this.wrapper.addEventListener("pointerdown", (e) => this._onPlayerPress(e), true);
     // Let the wrapper (and so every overlay) follow the stream's real aspect
     this.video.addEventListener("loadedmetadata", () => {
       if (this.video.videoWidth && this.video.videoHeight) {
@@ -165,7 +215,18 @@ export class WerewolfPlayer {
       }
       this._fitMasksToVideo();
     });
-    this.wrapper.addEventListener("mouseleave", () => this._startHideTimer());
+
+    // PHASES / ROLES panels: a tap on a closed one's tab opens it, a press
+    // anywhere else closes it; phones dock them below the player instead
+    for (const panel of [this.nightJumpButtons, this.rolePanel]) {
+      panel.addEventListener("click", (e) => this._onPanelClick(panel, e));
+    }
+    document.addEventListener("pointerdown", (e) => this._closePanelsOutside(e), true);
+    const onDockChange = () => this._placePanels();
+    if (this._dockQuery.addEventListener) this._dockQuery.addEventListener("change", onDockChange);
+    else this._dockQuery.addListener(onDockChange);
+
+    this.editHandlesBtn?.addEventListener("click", () => this._toggleEditHandles());
 
     // Keyboard
     document.addEventListener("keydown", (e) => this._onKeyDown(e));
@@ -353,14 +414,15 @@ export class WerewolfPlayer {
         el.appendChild(frame);
       }
 
-      // Inner hover zone + handle
+      // Inner hover zone + handle; the zone is what a press grabs (wider
+      // than the handle it shows, and wider still for a finger)
       const innerZone = document.createElement("div");
       innerZone.className = `mask-hover-zone zone-${innerSide}`;
       const innerHandle = document.createElement("div");
       innerHandle.className = `resize-handle handle-${innerSide}`;
       innerZone.appendChild(innerHandle);
       el.appendChild(innerZone);
-      this._bindMaskResize(el, innerHandle, mask, `handle-${innerSide}`);
+      this._bindMaskResize(el, innerZone, mask, `handle-${innerSide}`);
 
       // Outer hover zone + handle (role mode only: in full mode the outer
       // edge is pinned to the frame edge)
@@ -371,7 +433,7 @@ export class WerewolfPlayer {
         outerHandle.className = `resize-handle handle-${outerSide}`;
         outerZone.appendChild(outerHandle);
         el.appendChild(outerZone);
-        this._bindMaskResize(el, outerHandle, mask, `handle-${outerSide}`);
+        this._bindMaskResize(el, outerZone, mask, `handle-${outerSide}`);
       }
 
       // Delete button (visible on hover)
@@ -750,7 +812,8 @@ export class WerewolfPlayer {
     };
 
     const body = document.createElement("div");
-    body.className = "rp-body";
+    // (docked on a phone, By seat lays the seats out as the two sidebars)
+    body.className = `rp-body ${this.revealMode === "player" ? "rp-by-seat" : "rp-by-role"}`;
     panel.appendChild(body);
     if (this.revealMode === "player") {
       players.sort((a, b) => a.p.number - b.p.number);
@@ -801,16 +864,23 @@ export class WerewolfPlayer {
     body.scrollTop = scrollTop;
   }
 
-  _bindMaskResize(el, handle, mask, handleSide) {
+  // Drag a mask edge (mouse or finger). The pointer is captured by the
+  // zone, which stays in place for the whole drag.
+  _bindMaskResize(el, zone, mask, handleSide) {
     let startX, startLeft, startW;
 
-    const onMouseDown = (e) => {
+    const onPointerDown = (e) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
+      try { zone.setPointerCapture(e.pointerId); } catch {}
       startX = e.clientX;
       const elRect = el.getBoundingClientRect();
-      const wrapperW = this.wrapper.getBoundingClientRect().width;
-      const wrapperLeft = this.wrapper.getBoundingClientRect().left;
+      // Masks are fractions of their container, which in fullscreen sits
+      // on the letterboxed video rather than the whole wrapper
+      const box = this.nameMasksContainer.getBoundingClientRect();
+      const wrapperW = box.width;
+      const wrapperLeft = box.left;
       startW = elRect.width;
       startLeft = elRect.left - wrapperLeft;
       const maxW = wrapperW * 0.5;
@@ -840,8 +910,9 @@ export class WerewolfPlayer {
       };
 
       const onUp = () => {
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
+        zone.removeEventListener("pointermove", onMove);
+        zone.removeEventListener("pointerup", onUp);
+        zone.removeEventListener("pointercancel", onUp);
         if (!moved) return;
         // Write final geometry back to the mask object so re-renders
         // (add/delete mask) keep it, and persist
@@ -850,21 +921,129 @@ export class WerewolfPlayer {
         this.saveMetadata();
       };
 
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
+      zone.addEventListener("pointermove", onMove);
+      zone.addEventListener("pointerup", onUp);
+      zone.addEventListener("pointercancel", onUp);
     };
 
-    handle.addEventListener("mousedown", onMouseDown);
+    zone.addEventListener("pointerdown", onPointerDown);
   }
 
   // ── Custom controls: play/pause ──
 
   _togglePlay() {
     if (this.video.paused || this.video.ended) {
-      this.video.play();
+      // a refused play (no source yet, an undecodable one) is no exception:
+      // the error event explains the second
+      this.video.play()?.catch(() => {});
     } else {
       this.video.pause();
     }
+  }
+
+  // A click or tap on the video toggles playback. On a touch screen a tap
+  // while the overlaid controls are hidden only brings them up (a mouse
+  // shows them by moving); a tap that closed an open panel does nothing else
+  _onVideoClick() {
+    if (this._swallowVideoClick) {
+      this._swallowVideoClick = false;
+      return;
+    }
+    if (this._pointerType !== "mouse" && !this._controlsUpAtPress) {
+      this._showControls();
+      return;
+    }
+    this._togglePlay();
+  }
+
+  // Every press on the player (capture phase, before its target sees it)
+  _onPlayerPress(e) {
+    this._pointerType = e.pointerType || "mouse";
+    this._controlsUpAtPress = this._controlsShown();
+    if (this._controlsUpAtPress) this._showControls();
+  }
+
+  // Overlaid controls fade in and out; on a phone (not fullscreen) they sit
+  // below the video and always show
+  _controlsShown() {
+    return parseFloat(getComputedStyle(this.controls).opacity) > 0.5;
+  }
+
+  _skip(seconds) {
+    if (!isFinite(this.video.duration)) return;
+    this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + seconds));
+  }
+
+  // A video the browser cannot decode would just stay black. The library's
+  // downloads are AV1, which Safari plays only with an AV1 hardware decoder
+  // (iPhone 15 Pro, iPhone 16 and later, M3 Macs and later)
+  _onVideoError() {
+    const err = this.video.error;
+    if (!err || !this.video.getAttribute("src")) return;
+    const av1 = this.video.canPlayType('video/mp4; codecs="av01.0.09M.08"') !== "";
+    this.statusEl.textContent = av1
+      ? `The video failed to load (error ${err.code}${err.message ? `: ${err.message}` : ""})`
+      : "This browser can't play the video: it is AV1, which Safari plays only on devices with an AV1 decoder (iPhone 15 Pro, iPhone 16 or later)";
+  }
+
+  // ── PHASES / ROLES panels ──
+
+  // Phones (DOCK_QUERY) show both panels below the player as part of the
+  // page; everywhere else, and in fullscreen, they slide out over the
+  // video's edges
+  _placePanels() {
+    if (!this.dock) return;
+    const docked = this._dockQuery.matches && !this._isFullscreen();
+    if (docked === this._docked) return;
+    this._docked = docked;
+    this._closePanels();
+    if (docked) {
+      this.dock.append(this.nightJumpButtons, this.rolePanel);
+    } else {
+      this.wrapper.insertBefore(this.nightJumpButtons, this.controls);
+      this.wrapper.insertBefore(this.rolePanel, this.controls);
+    }
+  }
+
+  // Touch: a tap on a closed panel's tab (the tab is the panel's ::after,
+  // so the panel itself is the target) opens it. Clicks that bubble up from
+  // its buttons never do: a jump button closes the panel on its way. A
+  // mouse opens it by hovering (style.css).
+  _onPanelClick(panel, e) {
+    if (this._docked || this._pointerType === "mouse" || e.target !== panel || panel.classList.contains("open")) return;
+    e.stopPropagation();
+    this._closePanels();
+    panel.classList.add("open");
+  }
+
+  _closePanels() {
+    this.nightJumpButtons.classList.remove("open");
+    this.rolePanel.classList.remove("open");
+  }
+
+  // A press outside an open panel closes it; if the press was on the video,
+  // its click must not also play or pause
+  _closePanelsOutside(e) {
+    let closed = false;
+    for (const panel of [this.nightJumpButtons, this.rolePanel]) {
+      if (panel.classList.contains("open") && !panel.contains(e.target)) {
+        panel.classList.remove("open");
+        closed = true;
+      }
+    }
+    this._swallowVideoClick = closed && e.target === this.video;
+  }
+
+  // ✎ Edit > Show edit handles: touch screens have no hover to reveal the
+  // mask and night-marker handles (style.css hides them until this is on)
+  _toggleEditHandles() {
+    const on = !this.wrapper.classList.contains("editing");
+    this.wrapper.classList.toggle("editing", on);
+    this.editHandlesBtn.textContent = on ? "Hide edit handles" : "Show edit handles";
+    this.statusEl.textContent = on
+      ? "Edit handles on: drag a mask's inner edge or a night marker's ends; × removes one"
+      : "Edit handles off";
+    this._showControls();
   }
 
   _updatePlayBtn() {
@@ -878,7 +1057,14 @@ export class WerewolfPlayer {
   _updateTime() {
     const cur = this._fmt(this.video.currentTime);
     const dur = this._fmt(this.video.duration || 0);
-    this.timeDisplay.textContent = `${cur} / ${dur}`;
+    // "cur / dur"; a narrow one-line bar drops the " / dur" (style.css)
+    if (!this._timeParts) {
+      this._timeParts = [document.createElement("span"), document.createElement("span")];
+      this._timeParts[1].className = "t-dur";
+      this.timeDisplay.replaceChildren(...this._timeParts);
+    }
+    this._timeParts[0].textContent = cur;
+    this._timeParts[1].textContent = ` / ${dur}`;
   }
 
   _fmt(s) {
@@ -905,6 +1091,7 @@ export class WerewolfPlayer {
       this.video.currentTime = pct * this.video.duration;
     }
     this.progressPlayed.style.width = `${pct * 100}%`;
+    this._showControls();               // a long drag keeps them up
   }
 
   _endSeek() {
@@ -932,19 +1119,69 @@ export class WerewolfPlayer {
 
   // ── Fullscreen ──
 
+  _fullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
+  // The player fills the screen: the browser's fullscreen, or the page's
+  // stand-in for it (.pseudo-fs)
+  _isFullscreen() {
+    return this._fullscreenElement() === this.wrapper || this.wrapper.classList.contains("pseudo-fs");
+  }
+
   _toggleFullscreen() {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
+    if (this.wrapper.classList.contains("pseudo-fs")) {
+      this._setPseudoFullscreen(false);
+    } else if (this._fullscreenElement()) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
     } else {
-      this.wrapper.requestFullscreen();
+      this._enterFullscreen();
     }
   }
 
-  _onFullscreenChange() {
-    this.fullscreenBtn.title = document.fullscreenElement ? "Exit fullscreen" : "Fullscreen";
-    if (!document.fullscreenElement) {
-      this.wrapper.classList.remove("hide-cursor");
+  // iPhone Safari makes nothing fullscreen but a <video>, in its own player
+  // where no mask or overlay can follow. There, and whenever a request is
+  // refused, the wrapper is fixed over the whole screen instead
+  _enterFullscreen() {
+    const request = this.wrapper.requestFullscreen || this.wrapper.webkitRequestFullscreen;
+    const enabled = document.fullscreenEnabled ?? document.webkitFullscreenEnabled;
+    if (!request || enabled === false) {
+      this._setPseudoFullscreen(true);
+      return;
     }
+    let result;
+    try {
+      result = request.call(this.wrapper, { navigationUI: "hide" });
+    } catch {
+      this._setPseudoFullscreen(true);
+      return;
+    }
+    Promise.resolve(result).then(() => this._lockLandscape(), () => this._setPseudoFullscreen(true));
+  }
+
+  _setPseudoFullscreen(on) {
+    this.wrapper.classList.toggle("pseudo-fs", on);
+    document.documentElement.classList.toggle("pseudo-fs", on);
+    this._onFullscreenChange();
+  }
+
+  // A phone turns a landscape video sideways in fullscreen, as video apps
+  // do (Android allows the lock there; iOS has none: the user turns it)
+  _lockLandscape() {
+    const phone = Math.min(screen.width, screen.height) < 600 && matchMedia("(pointer: coarse)").matches;
+    if (!phone || !(this.video.videoWidth > this.video.videoHeight)) return;
+    try { screen.orientation?.lock?.("landscape")?.catch(() => {}); } catch {}
+  }
+
+  _onFullscreenChange() {
+    const fs = this._isFullscreen();
+    this.wrapper.classList.toggle("is-fs", fs);
+    this.fullscreenBtn.title = fs ? "Exit fullscreen" : "Fullscreen";
+    if (!fs) {
+      this.wrapper.classList.remove("hide-cursor");
+      try { screen.orientation?.unlock?.(); } catch {}
+    }
+    this._placePanels();
     this._fitMasksToVideo();
   }
 
@@ -955,7 +1192,7 @@ export class WerewolfPlayer {
   // ribbon. Pin the masks container to the video's content box instead.
   _fitMasksToVideo() {
     const el = this.nameMasksContainer;
-    const fs = document.fullscreenElement === this.wrapper;
+    const fs = this._isFullscreen();
     if (!fs || !this.video.videoWidth || !this.video.videoHeight) {
       el.style.left = el.style.top = el.style.width = el.style.height = "";
       return;
@@ -981,10 +1218,12 @@ export class WerewolfPlayer {
 
   _startHideTimer() {
     clearTimeout(this.hideTimer);
-    if (this.video.paused) return; // always visible when paused
+    // always visible when paused, and while the edit handles are out (the
+    // night markers' handles live in the controls)
+    if (this.video.paused || this.wrapper.classList.contains("editing")) return;
     this.hideTimer = setTimeout(() => {
       this.wrapper.classList.remove("controls-visible");
-      if (document.fullscreenElement) {
+      if (this._isFullscreen()) {
         this.wrapper.classList.add("hide-cursor");
       }
     }, 3000);
@@ -1014,7 +1253,9 @@ export class WerewolfPlayer {
   _updateNightState() {
     // The indicator reflects the phase itself; only the blackout/mute
     // depend on masks being enabled
-    this.phaseIndicator.textContent = this.isNight ? "🌙 Night" : "☀️ Day";
+    setParts(this.phaseIndicator, this.isNight
+      ? [["🌙"], [" Night", "ind-label"]]
+      : [["☀️"], [" Day", "ind-label"]]);
     this.phaseIndicator.classList.toggle("night", this.isNight);
     if (this.isNight && this.masksEnabled) {
       this.nightOverlay.classList.remove("hidden");
@@ -1075,10 +1316,12 @@ export class WerewolfPlayer {
         const endHandle = document.createElement("div");
         endHandle.className = "night-handle handle-end";
 
-        // Remove button
+        // Remove button. Its press must not reach the bar: the bar would
+        // seek and capture the pointer, and the click would go to the bar
         const removeBtn = document.createElement("button");
         removeBtn.className = "remove-phase";
         removeBtn.textContent = "×";
+        removeBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
         removeBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           this.metadata.night_phases.splice(i, 1);
@@ -1093,8 +1336,8 @@ export class WerewolfPlayer {
         marker.appendChild(removeBtn);
         this.nightMarkersEl.appendChild(marker);
 
-        this._bindHandleDrag(startHandle, phase, "start", dur, i);
-        this._bindHandleDrag(endHandle, phase, "end", dur, i);
+        this._bindHandleDrag(startHandle, marker, phase, "start", dur, i);
+        this._bindHandleDrag(endHandle, marker, phase, "end", dur, i);
       });
 
       // Card viewing (看牌): detected only, not editable
@@ -1137,14 +1380,14 @@ export class WerewolfPlayer {
       startBtn.textContent = this._fmt(phase.start);
       startBtn.title = "看牌 (card viewing) start";
       startBtn.addEventListener("click", () => {
-        this.video.currentTime = phase.start;
+        this._jumpTo(phase.start);
       });
       const endBtn = document.createElement("button");
       endBtn.className = "card-jump-btn jump-end";
       endBtn.textContent = this._fmt(phase.end);
       endBtn.title = "看牌 end: the first night falls";
       endBtn.addEventListener("click", () => {
-        this.video.currentTime = phase.end;
+        this._jumpTo(phase.end);
       });
       group.append(label, startBtn, endBtn);
       return group;
@@ -1170,7 +1413,7 @@ export class WerewolfPlayer {
       startBtn.textContent = this._fmt(phase.start);
       startBtn.title = `Night ${i + 1} start`;
       startBtn.addEventListener("click", () => {
-        this.video.currentTime = phase.start;
+        this._jumpTo(phase.start);
       });
 
       const endBtn = document.createElement("button");
@@ -1178,7 +1421,7 @@ export class WerewolfPlayer {
       endBtn.textContent = this._fmt(phase.end);
       endBtn.title = `Night ${i + 1} end (dawn)`;
       endBtn.addEventListener("click", () => {
-        this.video.currentTime = phase.end;
+        this._jumpTo(phase.end);
       });
 
       group.appendChild(label);
@@ -1189,13 +1432,27 @@ export class WerewolfPlayer {
     flushCards(Infinity);
   }
 
-  _bindHandleDrag(handle, phase, edge, duration, index) {
-    handle.addEventListener("mousedown", (e) => {
+  // A PHASES button: jump there, and close the panel a finger opened so
+  // the video shows again
+  _jumpTo(t) {
+    this.video.currentTime = t;
+    this._closePanels();
+  }
+
+  // Drag a night boundary (mouse or finger). The marker moves in place:
+  // rebuilding the markers mid-drag would drop the handle holding the
+  // pointer capture. A press that never moves changes and saves nothing.
+  _bindHandleDrag(handle, marker, phase, edge, duration, index) {
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
+      try { handle.setPointerCapture(e.pointerId); } catch {}
       const barRect = this.progressBar.getBoundingClientRect();
+      let moved = false;
 
       const onMove = (ev) => {
+        moved = true;
         const pct = Math.max(0, Math.min(1, (ev.clientX - barRect.left) / barRect.width));
         const time = pct * duration;
 
@@ -1205,19 +1462,25 @@ export class WerewolfPlayer {
           phase.end = Math.max(time, phase.start + 1);
         }
 
-        this._renderNightMarkers();
+        marker.style.left = `${(phase.start / duration) * 100}%`;
+        marker.style.width = `${((phase.end - phase.start) / duration) * 100}%`;
+        marker.dataset.tooltip = `${this._fmt(phase.start)} – ${this._fmt(phase.end)}`;
         this._onTimeUpdate();
       };
 
       const onUp = () => {
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
+        handle.removeEventListener("pointercancel", onUp);
+        if (!moved) return;
+        this._renderNightMarkers();       // the PHASES panel's times too
         this.statusEl.textContent = `Night phase ${index + 1}: ${this._fmt(phase.start)} – ${this._fmt(phase.end)}`;
         this.saveMetadata();
       };
 
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
+      handle.addEventListener("pointercancel", onUp);
     });
   }
 
@@ -1299,8 +1562,8 @@ export class WerewolfPlayer {
 
   _updateMaskToggleBtn() {
     const on = this.masksEnabled;
-    this.toggleBtn.textContent = on ? "Masks: On"
-      : (this.hiddenRoles ? "Masks: Off (hidden roles)" : "Masks: Off");
+    setParts(this.toggleBtn, on ? [["Masks: On"]]
+      : (this.hiddenRoles ? [["Masks: Off"], [" (hidden roles)", "mask-note"]] : [["Masks: Off"]]));
     this.toggleBtn.classList.toggle("active", on);
     this.toggleBtn.title = this.hiddenRoles
       ? "Hidden-roles broadcast: the show keeps roles as \u672a\u77e5 itself, so masks are off. Click (or M) to force them on."
@@ -1382,14 +1645,17 @@ export class WerewolfPlayer {
       }
       case "ArrowLeft":
         e.preventDefault();
-        if (isFinite(this.video.duration)) {
-          this.video.currentTime = Math.max(0, this.video.currentTime - 5);
-        }
+        this._skip(-5);
         break;
       case "ArrowRight":
         e.preventDefault();
-        if (isFinite(this.video.duration)) {
-          this.video.currentTime = Math.min(this.video.duration, this.video.currentTime + 5);
+        this._skip(5);
+        break;
+      case "Escape":
+        // the browser's fullscreen handles Escape itself; the stand-in not
+        if (this.wrapper.classList.contains("pseudo-fs")) {
+          e.preventDefault();
+          this._setPseudoFullscreen(false);
         }
         break;
     }

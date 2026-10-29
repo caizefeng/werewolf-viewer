@@ -761,9 +761,24 @@ bottom edge differs by < 24 levels).
   play() counts only while the same source is loaded), and with nothing playable `#video-message`
   says why on the video itself (the status-line note went unnoticed), naming the command that fetches
   a missing copy. The 10 library games got theirs 2026-10-28 (`--h264-copy --all`, 21 GB; each
-  checked: H.264 1080p60 + AAC, video duration equal to the original's). Same day, on fMxD6khxj2Q and
-  40WQgtMozXM (both GT), the night + card analysis on the H.264 copy gave the AV1 results exactly, the
-  scan 1.5-1.6x faster (67 vs 110 s, 98 vs 146 s); no R/G sample changed side of 2.5 (max |diff| 0.07)
+  checked: H.264 1080p60 + AAC, video duration equal to the original's). The analysis on the copies
+  matches the AV1 results on all 10 (2026-10-29): nights and card viewings to the hundredth of a second
+  (no R/G sample changed side of 2.5, max |diff| 0.49; the scan 1.5-1.6x faster, H.264 decodes
+  cheaper), and the role OCR read the same labels in the same 8 frames: same seats, roles and
+  factions, the hidden-roles game found as such, masks within 0.001 of the width, reveal bands within
+  0.002 of the height. Only 2 of the 70 sidebar probes counted two labels more or fewer, which changed
+  nothing (probes choose the scan window and the hidden-roles verdict)
+- **One format for every browser?** (user question 2026-10-29: H.264 only, or H.265?) YouTube serves
+  no H.265: its 1080p60 formats are H.264 (299; 312 over HLS), VP9 (303; 617 over HLS) and AV1 (399),
+  and their sizes move: in that day's listings of four games AV1 was 0.74-1.08x the H.264 (HYxFL5DLI8Y's
+  AV1 had been re-encoded at 4.0 Mbit/s after our 2.75 Mbit/s download) and VP9 0.77-1.16x. H.265 means
+  converting each game here; tested on one daytime minute (HYxFL5DLI8Y 25:00, the AV1 at 3.2 Mbit/s as
+  reference): x265 medium CRF 24 gave 3.1 Mbit/s at SSIM 0.982 / PSNR 37.6 dB, as close to the AV1 as
+  YouTube's own H.264 (4.4 Mbit/s, 0.981 / 37.4) but a second generation, at about real time on this
+  Mac; hevc_videotoolbox ignored -b:v (~5 Mbit/s whatever the target), was visibly blurrier at 5 Mbit/s
+  (0.951 / 33.4) and needed ~12 Mbit/s (-q:v 65) to match. Browsers mostly play H.265 (Safari and every
+  iOS browser, Chrome/Edge 107+, Firefox 137+; on Windows/Linux only with a hardware decoder), but it
+  saves nothing worth an hour of encoding per game
 - Home screen: manifest.webmanifest + the apple-mobile-web-app meta tags (standalone, no Safari bars);
   `viewport-fit=cover` with safe-area insets on #app and on the fullscreen controls and panel tabs. iOS
   ignores `background-attachment: fixed`, so on `(hover: none)` the backdrop image is drawn on the

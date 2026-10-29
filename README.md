@@ -125,8 +125,8 @@ The server listens on the whole local network, so a phone or tablet on the same 
 | | Minimum | Recommended |
 |---|---|---|
 | CPU | Any of the above; fewer or slower cores just take longer | 8 cores or more: one analysis keeps 5 to 8 busy |
-| Memory | 8 GB, with one analysis at a time (`WEREWOLF_MAX_ANALYSES=1`) | 16 GB: an analysis peaks near 3 GB, two at once near 6 GB |
-| Disk | 1.5 GB for the Python environment, OCR models and web packages | Plus about 1.7 GB per hour of video (YouTube's 1080p60 H.264) |
+| Memory | 8 GB, with one analysis at a time (`WEREWOLF_MAX_ANALYSES=1`) | 16 GB: an analysis peaks at 3 to 3.6 GB, two at once near 6 GB |
+| Disk | 1.5 GB for the Python environment, OCR models and web packages | Plus about 1.7 GB per hour of video: YouTube's 1080p60 H.264, 1.2 to 2.1 GB per hour |
 | GPU | Not needed | |
 
 Everything runs on the CPU by default. With the CUDA build of PaddlePaddle the OCR runs on an NVIDIA GPU (untested here), but video decoding stays on the CPU. Apple GPUs are not used.
@@ -137,16 +137,16 @@ Measured on a Mac mini with an Apple M4 (4 performance and 6 efficiency cores, 1
 
 | Game length | Video file | Analysis |
 |---|---|---|
-| 45 min | 1.1 GB | 3.5 min |
-| 1 h 02 min | 1.9 GB | 3.7 min |
-| 1 h 20 min | 1.8 GB | 3.1 min |
-| 1 h 37 min | 2.6 GB | 5.4 min |
-| 2 h 28 min | 3.6 GB | 6.7 min |
+| 45 min | 1.3 GB | 2.6 min |
+| 59 min | 1.6 GB | 1.7 min |
+| 1 h 02 min | 1.8 GB | 2.9 min |
+| 1 h 37 min | 3.4 GB | 3.7 min |
+| 2 h 28 min | 4.5 GB | 4.1 min |
 
-- **Where the time goes.** Decoding takes about 2 minutes per hour of video: the scan reads every frame of the 1080p60 AV1 stream to sample one every 2 s. OCR checks around the night candidates add as much as 1.5 minutes more (the 1 h 20 game is a hidden-roles broadcast, with few to check). Meanwhile a separate process reads the role labels, which takes 3 to 6 minutes.
-- **Two at once**, the server's default: the 1 h 02 and 1 h 37 games finished side by side in 7.4 and 7.9 minutes, only 1.2 minutes sooner than back to back, because one analysis already keeps most of the M4 busy. Together they peaked at 5.6 GB.
-- **A slower CPU.** The analysis is CPU-bound, so its time scales with CPU speed. Restricted to its six efficiency cores (`taskpolicy -c background`), the same Mac took 7.5 minutes for the 1 h 02 game, twice as long.
-- **Downloads** depend on your connection. Here (about 220 Mbit/s) the 45-minute game, 1.1 GB, took 43 s; at 50 Mbit/s it would take about 3 minutes.
+- **Where the time goes.** Decoding takes about 1.2 minutes per hour of video: the scan reads every frame of the 1080p60 H.264 stream to sample one every 2 s (the AV1 downloads used before took about 2). OCR checks around the night candidates add as much as 1.7 minutes more (the 59-minute game is a hidden-roles broadcast, with few to check). Meanwhile a separate process reads the role labels, which takes 1.7 to 3.6 minutes.
+- **Two at once**, the server's default: the 1 h 02 and 1 h 37 games finished side by side in 5.1 and 5.3 minutes, only 1.3 minutes sooner than back to back, because one analysis already keeps most of the M4 busy. Together they peaked at 6.0 GB.
+- **A slower CPU.** The analysis is CPU-bound, so its time scales with CPU speed. Restricted to its six efficiency cores (`taskpolicy -c background`), the same Mac took twice as long: 7.5 minutes instead of 3.7 for the 1 h 02 game, measured on the earlier AV1 download.
+- **Downloads** depend on your connection and on YouTube. Here the H.264 downloads of 28 games ran at 4 to 37 MB/s, so a one-hour game (about 1.7 GB) took 1 to 7 minutes; at 50 Mbit/s it would take about 4.5. Now and then YouTube throttles a download to about 2 MB/s (some 12 minutes for that game); stopping it and downloading again gets a fresh connection.
 
 To time your own machine, run `python3 processing/benchmarks/benchmark_hardware.py VIDEO_ID ...` on games you have downloaded. It analyses them through a temporary library, so their metadata is left alone, and prints the same figures; `--together` runs them side by side.
 
@@ -192,7 +192,7 @@ python3 processing/update_role_maps.py [VIDEO_ID ...]    # re-scan roles only, k
 | Variable | Default | Meaning |
 |---|---|---|
 | `WEREWOLF_MAX_DOWNLOADS` | 3 | Concurrent downloads |
-| `WEREWOLF_MAX_ANALYSES` | 2 | Concurrent analyses (each keeps 5 to 8 cores busy and peaks near 3 GB) |
+| `WEREWOLF_MAX_ANALYSES` | 2 | Concurrent analyses (each keeps 5 to 8 cores busy and peaks at 3 to 3.6 GB) |
 | `WEREWOLF_VIDEOS_DIR` | `videos/` | Where games are stored |
 | `WEREWOLF_DEMO` | unset | Serve the rendered demo games instead of YouTube |
 

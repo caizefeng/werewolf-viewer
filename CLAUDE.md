@@ -102,17 +102,19 @@ python3 processing/download.py --video-id="VIDEO_ID"
 # If downloads die mid-stream with "HTTP Error 403: Forbidden" (a few % in):
 # YouTube's PO-token enforcement invalidated that client's stream URLs.
 # FIRST update yt-dlp (its maintainers rotate default clients to ungated
-# ones; 2026-08-19 moved to visionos and fixed this). download.py tries
-# player_client=web_embedded first, then the default clients (2 attempts
-# each, since the 403s are intermittent). If both break, sweep clients:
+# ones; 2026-08-19 moved to visionos and fixed this). download.py tries the
+# default clients first (2 attempts, since the 403s are intermittent), then
+# falls back to player_client=web_embedded. If both break, sweep clients:
 #   yt-dlp --extractor-args "youtube:player_client=CLIENT" -f "bestvideo..." --print format_id URL
 # or install a PO token provider (bgutil-ytdlp-pot-provider).
 #
-# If downloads crawl (~2 MB/s): YouTube throttles some formats per client.
-# 2026-10-29: the default clients (visionos) served the H.264 format 299 at
-# ~2.3 MB/s and the AV1 399 at ~26 MB/s; web_embedded served the same 299
-# file (same size to the byte) at ~12 MB/s, hence web_embedded first. Time
-# a client by starting `yt-dlp -f 299 ...` with it and watching the .part
+# If a download crawls (~2 MB/s, every 10 MB chunk request stalling before
+# data flows): YouTube throttled that download session. 2026-10-29 it hit the
+# H.264 format 299 on both clients (default 2 of 28 sessions, web_embedded 1 of
+# 13; the rest ran 4-37 MB/s; both clients serve the same file, byte for
+# byte). Restarting the download gets a new session (download.py
+# resumes the .part; the UI's Stop deletes it). yt-dlp's --throttled-rate
+# re-extracts without any limit, so it is not used
 #
 # GOTCHA: if `processing/venv/bin/pip list | grep yt-dlp` shows version
 # "None", the venv has duplicate yt_dlp-*.dist-info dirs and `pip install -U`
@@ -282,18 +284,21 @@ The user watches games on the server while development goes on, so there are two
   break a chain. Boundaries stay red-light based (refined), never extended by evidence
 - **filter_cut_bounded_phases**: removes phases where BOTH outer boundaries are camera cuts (both entry and exit diffs >= 40) — these are brief red-lit scenes, not real night phases. Phases assembled from >= 3 bursts are exempt (a real night whose outer bursts begin/end on cuts)
 - Constants: `RED_THRESH=2.5`, `CUT_THRESH=40`, `GAP_RED_THRESH=1.3`, `GAP_ELEVATED_FRACTION=0.6`, `GAP_MIN_FLOOR=1.05`, `MAX_MERGE_GAP=100`, `MAX_CUT_MERGE_GAP=180`, `MAX_EVIDENCE_GAP=240`, `MAX_EVIDENCE_GAP_NO_BANNERS=120`, `MIN_EVIDENCE_FRAGMENT=6`, `BANNER_MIN_GAP=20`, `DAWN_BANNER_WINDOW=24`, `NIGHT_BANNER_LEAD=12`, `NIGHT_BANNER_LAG=6`, `MIN_PHASE_DURATION=35`, `ENTRY_BUFFER=2.0`, `EXIT_BUFFER=1.0`, `REFINE_STEP=0.25`, `SCAN_INTERVAL=2`, `CUT_WINDOW=3`
-- Performance (2026-10-26, `benchmarks/benchmark_hardware.py` on this Mac mini: Apple M4, 4 performance +
-  6 efficiency cores, 16 GB; every library video is 1080p60 AV1, ~1.45 GB per hour, decoded in
-  software by OpenCV): the corner scan decodes every frame, ~2 min per hour of video with 3 threads
-  (it was ~40 s per hour on 720p video; GPU decoding via VideoToolbox was slower due to GPU→CPU
-  transfer overhead). The card search adds ~15 s and the lazy OCR evidence checks (banners every 3s
-  in short windows, sidebar every 10s inside candidate gaps) 0-1.6 min (a hidden-roles game has few
-  candidates); the role-OCR subprocess runs 3-6 min alongside. Full analysis 3.1-6.7 min for 45-148
-  min games, 5.4-7.6 cores busy on average, peak RSS ~2.9 GB (main 1.2-1.3 GB + OCR child 1.6-1.7
-  GB). Two at once (the server's default slots): 7.4 + 7.9 min against 3.7 + 5.4 alone, only ~14%
-  more throughput, 5.6 GB together. Efficiency cores only (`taskpolicy -c background`): 2.0x as long.
-  A 1.08 GB download took 43 s (~27 MiB/s). The README's Requirements section quotes these numbers;
-  re-measure after changes that move them (a macOS daemon, audiomxd, held one core throughout)
+- Performance (2026-10-29, `benchmarks/benchmark_hardware.py` on this Mac mini: Apple M4, 4 performance +
+  6 efficiency cores, 16 GB; every video is 1080p60 H.264, ~1.65 GB per hour, decoded in software by
+  OpenCV): the corner scan decodes every frame, ~1.2 min per hour of video with 3 threads inside a full
+  analysis (~1.05 alone; ~2 on the AV1 downloads before 2026-10-29; ~40 s per hour on 720p video; GPU
+  decoding via VideoToolbox was slower due to GPU→CPU transfer overhead). The card search adds ~15 s
+  and the lazy OCR evidence checks (banners every 3s in short windows, sidebar every 10s inside
+  candidate gaps) 0-1.7 min (a hidden-roles game has few candidates); the role-OCR subprocess runs
+  1.7-3.6 min alongside. Full analysis 1.7-4.1 min for 45-148 min games (AV1: 3.1-6.7), 5.0-7.3 cores
+  busy on average, peak RSS 2.9-3.6 GB (main 1.3-1.9 GB + OCR child 1.6-1.7 GB). Two at once (the
+  server's default slots): 5.1 + 5.3 min against 2.9 + 3.7 alone, ~25% more throughput (AV1: ~14%),
+  6.0 GB together. Efficiency cores only (`taskpolicy -c background`): 2.0x as long on AV1; the H.264
+  rerun (11.2 min) shared those cores with macOS's mediaanalysisd and does not count. Downloads: see
+  the throttling note under Key Commands. The README's Requirements section quotes these numbers;
+  re-measure after changes that move them (a macOS daemon held 1-1.5 cores in both runs: audiomxd
+  2026-10-26, mediaanalysisd 2026-10-29)
 
 ### Card Viewing (看牌) Detection (analyze_cards.py, since 2026-10-25)
 - What it is: after the pre-game (commentators, player introductions) the director tours the twelve
@@ -628,9 +633,9 @@ The user watches games on the server while development goes on, so there are two
 - **Several jobs at once** (since 2026-10-15): every search row has its own Download/Stop button and
   progress bars, and ↻ re-analyze can run on several library rows. The server keeps a job per video
   (one job per video at a time) and a FIFO queue with separate slot limits: `MAX_DOWNLOADS=3`
-  (network-bound) and `MAX_ANALYSES=2` (each analysis keeps 5-8 cores busy and peaks near 3 GB: 3 scan
-  threads + an OCR subprocess; on this 10-core M4 two side by side give only ~14% more throughput than
-  one after the other, see Performance above); override with env `WEREWOLF_MAX_DOWNLOADS` / `WEREWOLF_MAX_ANALYSES` before
+  (network-bound) and `MAX_ANALYSES=2` (each analysis keeps 5-8 cores busy and peaks at 3-3.6 GB: 3
+  scan threads + an OCR subprocess; on this 10-core M4 two side by side give only ~25% more throughput
+  than one after the other, see Performance above); override with env `WEREWOLF_MAX_DOWNLOADS` / `WEREWOLF_MAX_ANALYSES` before
   `scripts/start.sh`. Phases: download jobs go queued → downloading → waiting → processing → done,
   analyze jobs start at waiting; rows show "queued #n" while a job waits for a slot. The front end
   runs ONE poller (`pollJobs`, 2s) for all jobs and stops it when none is active; a library row
@@ -767,7 +772,18 @@ bottom edge differs by < 24 levels).
   factions, the hidden-roles game found as such, masks within 0.001 of the width, reveal bands within
   0.002 of the height. Only 2 of the 70 sidebar probes counted two labels more or fewer, which changed
   nothing (probes choose the scan window and the hidden-roles verdict). So the copies replaced the 10
-  library games' AV1 files (16.8 GB freed). Local conversion was the alternative: VideoToolbox
+  library games' AV1 files (16.8 GB freed), and the 28 other ground-truth games (9 S21 in videos/, 19
+  S22/S23 in videos-dev/) were downloaded again as H.264 and replayed against the AV1 analysis of the
+  same code (cached AV1 scans + results; scratch migrate_gt.py): all 28 the same frame count and
+  duration; over 37.7 h of video (67,772 scan samples) one R/G sample changed side of 2.5, 30 frame
+  diffs crossed CUT_THRESH and 4 motions CARD_COARSE, and 27 games came out with identical nights and
+  card viewings. The 28th, 9Yij3uRUp1M, ends its unlit first night 1.25 s later (13:53.75 vs
+  13:52.50): that end is the first sidebar sighting narrowed to ~2 s, and the probe at 13:52.5 caught
+  the sidebar fading in, where OCR read 3 labels on the AV1 frame and 1 on the H.264 one (12 on both
+  0.5 s later). Every ground truth still passes (GROUND_TRUTH, CARD_GROUND_TRUTH, FIRST_NIGHT_GT). The
+  H.264 files take 1.23-2.13 GB per hour of video (1.65 overall; the S21 broadcasts the most), the
+  scan 0.96-1.21 min per hour (3 threads), and every game on disk is H.264 + AAC since 2026-10-29.
+  Local conversion was the alternative: VideoToolbox
   H.264/HEVC ran 3.75x real time (~16 min per hour of video, AV1 decoding the bottleneck). The player
   has no fallback any more: a video that can't play (`_onVideoError`, or a play() refused with
   NotSupportedError while the same source is still loaded) puts `#video-message` on the video itself

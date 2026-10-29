@@ -32,18 +32,15 @@ def _run_yt_dlp(base_cmd):
     CalledProcessError when every attempt fails.
 
     YouTube keeps changing which player clients serve downloadable https
-    formats without a PO token, and how fast. web_embedded comes first: the
-    default clients (visionos, 2026-10) serve the H.264 format at ~2 MB/s, a
-    tenth of their speed for the AV1 one, while web_embedded serves the same
-    file (same size to the byte) at ~12 MB/s here; it also worked when the
-    defaults were gated (2026-07). The defaults are the fallback, since
-    yt-dlp rotates them to ungated clients (2026-08: visionos). Stream URLs
-    also get invalidated intermittently (HTTP 403 a few % in) under
-    YouTube's PO-token experiments, so each strategy gets two tries with a
-    fresh extraction."""
+    formats without a PO token, and yt-dlp rotates its default clients
+    accordingly (2026-08: visionos). Use the defaults first, and fall back
+    to web_embedded, which has worked when the defaults were gated
+    (2026-07). Stream URLs also get invalidated intermittently (HTTP 403 a
+    few % in) under YouTube's PO-token experiments, so each strategy gets
+    two tries with a fresh extraction."""
     strategies = [
-        ("web_embedded client", ["--extractor-args", "youtube:player_client=web_embedded"]),
         ("default clients", []),
+        ("web_embedded client", ["--extractor-args", "youtube:player_client=web_embedded"]),
     ]
     tries_per_strategy = 2
     last_err = None

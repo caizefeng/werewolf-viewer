@@ -43,12 +43,6 @@ const REVEAL_MODE_KEY = "werewolf.revealMode"; // "player" | "role"
 // the player there while it is not fullscreen. Keep in step with the CSS.
 const DOCK_QUERY = "(max-width: 699px) and (orientation: portrait)";
 
-// The downloads are AV1 video with Opus audio. Safari, and with it every
-// browser on an iPhone, plays AV1 only with an AV1 decoder (iPhone 15 Pro
-// and later) and Opus not in MP4 at all: such a browser starts with the
-// game's H.264 + AAC copy (download.py --h264-copy) when it has one
-const PLAYS_ORIGINAL = document.createElement("video").canPlayType('video/mp4; codecs="av01.0.09M.08, opus"') !== "";
-
 // Write a control's label as parts; a part with a class can be hidden on a
 // narrow player (style.css container queries) while textContent reads the
 // whole label as before
@@ -110,7 +104,6 @@ export class WerewolfPlayer {
     this.userMuted = false; // mute requested by the user (vs. night auto-mute)
     this.hideTimer = null;
     this.isSeeking = false;
-    this._copyUrl = null;          // the open game's H.264 copy, if any
     this._pointerType = "mouse";   // of the last press on the player
     this._docked = false;          // panels below the player (phones)
     this._dockQuery = window.matchMedia(DOCK_QUERY);
@@ -293,13 +286,9 @@ export class WerewolfPlayer {
     }
   }
 
-  // url: the AV1/Opus original; copyUrl: its H.264 + AAC copy, when the
-  // game has one. A browser that can't play the original starts with the
-  // copy; any other falls back to it if the original fails (_cannotPlay)
-  loadVideo(url, copyUrl = null) {
-    this._copyUrl = copyUrl;
+  loadVideo(url) {
     this._hideVideoMessage();
-    this.video.src = copyUrl && !PLAYS_ORIGINAL ? copyUrl : url;
+    this.video.src = url;
   }
 
   // Drop the loaded video's state (used when it is deleted)
@@ -307,7 +296,6 @@ export class WerewolfPlayer {
     this.metadata = null;
     this.metadataVersion = null;
     this.videoId = null;
-    this._copyUrl = null;
     this._hideVideoMessage();
     this.roleMap = {};
     this.revealed = new Set();
@@ -950,12 +938,12 @@ export class WerewolfPlayer {
     if (this.video.paused || this.video.ended) {
       // A refused play is no exception. One the browser cannot decode
       // usually also fires "error"; WebKit may only refuse play(). Act on
-      // it only while the same source is still loaded (the error event may
-      // already have switched to the copy)
+      // it only while the same source is still loaded (another game may
+      // have been opened since)
       const src = this.video.getAttribute("src");
       this.video.play()?.catch((e) => {
         if (e?.name === "NotSupportedError" && src && this.video.getAttribute("src") === src) {
-          this._cannotPlay(e.message || "not supported");
+          this._cannotPlay(e.message || "not supported", true);
         }
       });
     } else {
@@ -999,26 +987,20 @@ export class WerewolfPlayer {
   _onVideoError() {
     const err = this.video.error;
     if (!err || !this.video.getAttribute("src")) return;
-    this._cannotPlay(`error ${err.code}${err.message ? `: ${err.message}` : ""}`);
+    this._cannotPlay(`error ${err.code}${err.message ? `: ${err.message}` : ""}`,
+      err.code === err.MEDIA_ERR_DECODE || err.code === err.MEDIA_ERR_SRC_NOT_SUPPORTED);
   }
 
-  // The loaded source cannot play. Try the game's H.264 copy (at the same
-  // point) if it has one not tried yet; otherwise say why on the video
-  // itself: a black video with a note in the status line read as "when i
-  // hit the play button nothing happens" (iPhone 14, 2026-10-28)
-  _cannotPlay(detail) {
-    const src = this.video.getAttribute("src");
-    if (this._copyUrl && src !== this._copyUrl) {
-      const at = this.video.currentTime;
-      this.video.src = this._copyUrl;
-      if (at > 0) {
-        this.video.addEventListener("loadedmetadata", () => { this.video.currentTime = at; }, { once: true });
-      }
-      return;
-    }
-    const text = !this._copyUrl && !PLAYS_ORIGINAL
-      ? "This browser can't play this game's video (AV1 with Opus audio), and the game has no H.264 copy yet. " +
-        `To fetch one, run on the server: processing/download.py --h264-copy --video-id=${this.videoId}`
+  // The loaded video cannot play: say why on the video itself (a black
+  // video with a note in the status line read as "when i hit the play
+  // button nothing happens", iPhone 14, 2026-10-28). Every browser plays the
+  // H.264 downloads, so a file that does not decode (undecodable) is damaged,
+  // missing or one of the AV1 downloads from before 2026-10-29
+  _cannotPlay(detail, undecodable = false) {
+    const id = this.videoId;
+    const text = undecodable
+      ? `This browser can't play this game's video (${detail}). Download it again: on the server, ` +
+        `delete videos/${id}/video.mp4 and run processing/download.py --video-id=${id}`
       : `The video failed to load (${detail})`;
     this._showVideoMessage(text);
     this.statusEl.textContent = text;

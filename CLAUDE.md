@@ -38,8 +38,7 @@ werewolf_viewer/
 │   └── download.py        # YouTube video downloader via yt-dlp
 ├── videos/                # Downloaded videos + metadata (not in git)
 │   └── <video-id>/
-│       ├── video.mp4      # Downloaded video file (AV1 + Opus; what the analysis reads)
-│       ├── video.h264.mp4 # YouTube's H.264 + AAC version, for browsers without AV1 (iPhones)
+│       ├── video.mp4      # Downloaded video file (H.264 + AAC, plays in every browser; the analysis reads it)
 │       ├── info.json      # {title, video_id} from YouTube
 │       ├── metadata.json  # {night_phases, name_masks, role_map, ...} from analysis
 │       └── viewer_state.json  # {bookmarked, position, duration, ...} bookmark + resume point
@@ -78,14 +77,16 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 
 ### Key Commands
 ```bash
-# Download a video (default quality: 1080p)
+# Download a video (default quality: 1080p): YouTube's H.264 + AAC version
+# (formats 299 + 140, moov first), the one format every browser plays (see
+# "H.264 only"); a video without one gets another codec and a warning.
 # Downloads to video.download.mp4, renamed to video.mp4 only on success
 # (an interrupted merge can't leave a truncated video.mp4 blocking re-download)
 source processing/venv/bin/activate
 python3 processing/download.py --video-id="VIDEO_ID"
-# It then also fetches YouTube's H.264 + AAC version as video.h264.mp4 (for
-# iPhones; see "AV1 and the H.264 copies"). For games downloaded without one:
-python3 processing/download.py --h264-copy --video-id="VIDEO_ID"   # or --all
+# To replace a game's video (damaged, or an AV1 download from before
+# 2026-10-29), delete its video.mp4 and run the same command: metadata.json,
+# edits and viewer_state.json stay, and the timeline is the same
 
 # If downloads fail with "Requested format is not available" or SABR warnings,
 # yt-dlp is stale — YouTube breaks old versions quickly. Update it with:
@@ -101,11 +102,17 @@ python3 processing/download.py --h264-copy --video-id="VIDEO_ID"   # or --all
 # If downloads die mid-stream with "HTTP Error 403: Forbidden" (a few % in):
 # YouTube's PO-token enforcement invalidated that client's stream URLs.
 # FIRST update yt-dlp (its maintainers rotate default clients to ungated
-# ones; 2026-08-19 moved to visionos and fixed this). download.py tries the
-# default clients first (2 attempts, since the 403s are intermittent), then
-# falls back to player_client=web_embedded. If both break, sweep clients:
+# ones; 2026-08-19 moved to visionos and fixed this). download.py tries
+# player_client=web_embedded first, then the default clients (2 attempts
+# each, since the 403s are intermittent). If both break, sweep clients:
 #   yt-dlp --extractor-args "youtube:player_client=CLIENT" -f "bestvideo..." --print format_id URL
 # or install a PO token provider (bgutil-ytdlp-pot-provider).
+#
+# If downloads crawl (~2 MB/s): YouTube throttles some formats per client.
+# 2026-10-29: the default clients (visionos) served the H.264 format 299 at
+# ~2.3 MB/s and the AV1 399 at ~26 MB/s; web_embedded served the same 299
+# file (same size to the byte) at ~12 MB/s, hence web_embedded first. Time
+# a client by starting `yt-dlp -f 299 ...` with it and watching the .part
 #
 # GOTCHA: if `processing/venv/bin/pip list | grep yt-dlp` shows version
 # "None", the venv has duplicate yt_dlp-*.dist-info dirs and `pip install -U`
@@ -157,8 +164,7 @@ The user watches games on the server while development goes on, so there are two
   change restarts it and drops in-memory jobs, hence the refusal while `/api/job-status` shows an
   active job; `--force` overrides). Never edit files under `.prod/`.
 - **dev** (`scripts/start.sh dev`, port 5174): runs from this working tree (hot reload) with
-  `WEREWOLF_VIDEOS_DIR=videos-dev`. `scripts/dev-library.sh ID...|--all` hard-links video.mp4 (and
-  video.h264.mp4) and
+  `WEREWOLF_VIDEOS_DIR=videos-dev`. `scripts/dev-library.sh ID...|--all` hard-links video.mp4 and
   copies info.json/metadata.json, so dev analyses, edits and deletes never touch production.
   `VITE_INSTANCE=dev` makes the page say "dev" (header badge, amber top rule, tab title).
 - Both bind 0.0.0.0. The e2e tests start their own throwaway servers on free ports.
@@ -743,31 +749,30 @@ bottom edge differs by < 24 levels).
 - The video has `playsinline` (without it an iPhone plays it in its own fullscreen player: no masks, no
   night overlay), `disablepictureinpicture`, `disableremoteplayback` and `x-webkit-airplay="deny"`
   (picture-in-picture and casting would show it unmasked); the wrapper has `-webkit-touch-callout: none`
-- **AV1 and the H.264 copies** (user report 2026-10-28, iPhone 14 + Chrome: "when i hit the play
-  button nothing happens, the canvas still all black"): the downloads are AV1 1080p60 + Opus, and every
-  iOS browser is WebKit, which decodes AV1 only with an AV1 hardware decoder (A17 Pro: iPhone 15 Pro and
-  later; M3 Macs) and takes no Opus in MP4 at all (Playwright's WebKit: canPlayType "" for
-  `audio/mp4; codecs="opus"`). So download.py also fetches YouTube's own H.264 + AAC version
-  (`bestvideo[vcodec^=avc1][height<=1080][fps<=60]+bestaudio[acodec^=mp4a]`: formats 299 + 140,
-  ~3.6 Mbit/s against AV1's 2.6-2.9: 1.71 GB per hour vs 1.35 over the 10 library games, 1.27x overall,
-  1.19-1.45x per game; moov first via `-movflags +faststart`) as
-  `video.h264.mp4`, non-fatal when YouTube has none. Checked on fMxD6khxj2Q: same video duration to
-  the microsecond (3547.266667 s), same frames at the same times (mean difference ~1.7/255), so every
-  stored time holds for both files. Local conversion was the alternative: VideoToolbox H.264/HEVC ran
-  3.75x real time (~16 min per hour of video, AV1 decoding the bottleneck) against ~1 min to download.
-  The analysis keeps reading video.mp4. /api/videos reports `h264`; the player (`PLAYS_ORIGINAL`,
-  canPlayType of `video/mp4; codecs="av01.0.09M.08, opus"`) starts such a browser on the copy, any
-  browser falls back to it when the original fails (`_cannotPlay`, at the same position; a refused
-  play() counts only while the same source is loaded), and with nothing playable `#video-message`
-  says why on the video itself (the status-line note went unnoticed), naming the command that fetches
-  a missing copy. The 10 library games got theirs 2026-10-28 (`--h264-copy --all`, 21 GB; each
-  checked: H.264 1080p60 + AAC, video duration equal to the original's). The analysis on the copies
-  matches the AV1 results on all 10 (2026-10-29): nights and card viewings to the hundredth of a second
+- **H.264 only** (user report 2026-10-28, iPhone 14 + Chrome: "when i hit the play button nothing
+  happens, the canvas still all black"; then 2026-10-29: "migrate everything in the project to H.264").
+  The downloads were AV1 1080p60 + Opus, and every iOS browser is WebKit, which decodes AV1 only with
+  an AV1 hardware decoder (A17 Pro: iPhone 15 Pro and later; M3 Macs) and takes no Opus in MP4 at all
+  (Playwright's WebKit: canPlayType "" for `audio/mp4; codecs="opus"`). download.py now fetches
+  YouTube's own H.264 + AAC version as video.mp4 (`format_spec`: formats 299 + 140, moov first via
+  `-movflags +faststart`; a video without H.264 gets the best other codec and a warning): ~3.6 Mbit/s
+  against AV1's 2.6-2.9, 1.71 GB per hour vs 1.35 over the 10 library games (1.27x overall, 1.19-1.45x
+  per game). The timeline is the AV1's: on every game the same video duration and frame count, the same
+  frames at the same times (fMxD6khxj2Q: mean difference ~1.7/255), so stored times, edits and resume
+  points carry over. On the way (2026-10-28) the H.264 file was a second copy, video.h264.mp4, for
+  browsers without AV1 (`--h264-copy`, a player fallback). The analysis on the copies matched the AV1
+  results on all 10 library games (2026-10-29): nights and card viewings to the hundredth of a second
   (no R/G sample changed side of 2.5, max |diff| 0.49; the scan 1.5-1.6x faster, H.264 decodes
   cheaper), and the role OCR read the same labels in the same 8 frames: same seats, roles and
   factions, the hidden-roles game found as such, masks within 0.001 of the width, reveal bands within
   0.002 of the height. Only 2 of the 70 sidebar probes counted two labels more or fewer, which changed
-  nothing (probes choose the scan window and the hidden-roles verdict)
+  nothing (probes choose the scan window and the hidden-roles verdict). So the copies replaced the 10
+  library games' AV1 files (16.8 GB freed). Local conversion was the alternative: VideoToolbox
+  H.264/HEVC ran 3.75x real time (~16 min per hour of video, AV1 decoding the bottleneck). The player
+  has no fallback any more: a video that can't play (`_onVideoError`, or a play() refused with
+  NotSupportedError while the same source is still loaded) puts `#video-message` on the video itself
+  (the status-line note went unnoticed): for a decode or unsupported-source error it says to delete
+  video.mp4 and run download.py again, otherwise "The video failed to load (...)"
 - **One format for every browser?** (user question 2026-10-29: H.264 only, or H.265?) YouTube serves
   no H.265: its 1080p60 formats are H.264 (299; 312 over HLS), VP9 (303; 617 over HLS) and AV1 (399),
   and their sizes move: in that day's listings of four games AV1 was 0.74-1.08x the H.264 (HYxFL5DLI8Y's
@@ -778,7 +783,7 @@ bottom edge differs by < 24 levels).
   Mac; hevc_videotoolbox ignored -b:v (~5 Mbit/s whatever the target), was visibly blurrier at 5 Mbit/s
   (0.951 / 33.4) and needed ~12 Mbit/s (-q:v 65) to match. Browsers mostly play H.265 (Safari and every
   iOS browser, Chrome/Edge 107+, Firefox 137+; on Windows/Linux only with a hardware decoder), but it
-  saves nothing worth an hour of encoding per game
+  saves nothing worth an hour of encoding per game. The user chose H.264 only (above)
 - Home screen: manifest.webmanifest + the apple-mobile-web-app meta tags (standalone, no Safari bars);
   `viewport-fit=cover` with safe-area insets on #app and on the fullscreen controls and panel tabs. iOS
   ignores `background-attachment: fixed`, so on `(hover: none)` the backdrop image is drawn on the
@@ -804,15 +809,14 @@ bottom edge differs by < 24 levels).
   stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
   saves, switch and tab-close saves, watched games, another device, touch, survival of
   re-analysis, deletion and re-download). The bookmark suite runs a re-analysis and a re-download,
-  so a full run takes several minutes. `mobile` (2026-10-28, 56 checks, ~70 s): an upright phone
+  so a full run takes several minutes. `mobile` (2026-10-28, 54 checks, ~60 s): an upright phone
   (layout order, no sideways scroll, inline-video attributes, controls below the video, overlays on the
   video only, 34px targets, taps, ±10 s, a finger dragging the progress bar, docked panels, seat grid,
   no invisible ×, Library/Search tabs, jump back to the player, a night handle and a mask edge dragged
   by touch, browser fullscreen), an iPhone without the Fullscreen API (the stand-in, its panels and
   taps), the phone turned sideways (one-line controls even for an hour-long game), a tablet, and a
-  1366 laptop without any of it; then the H.264 copies on fixtures (a copy, a broken original with a
-  copy, a broken original without): picked up front without AV1 + Opus (simulated iPhone 14, and
-  WebKit as it is), a fallback when the original fails, the message on the video. Touch drags are CDP
+  1366 laptop without any of it; then a video.mp4 that can't play (a fixture of zeros): the message
+  on the video, naming the re-download, gone again when another game opens. Touch drags are CDP
   touch events on Chromium; `--webkit` (for this suite: the others expect Chromium's Fullscreen API)
   replays them as touch-type pointer events
 - **Run mutating UI tests here, not against the real server**: the earlier scratch walks used the
@@ -853,8 +857,7 @@ bottom edge differs by < 24 levels).
   footage, titles or players appear in the repository
 
 ## API Endpoints (vite.config.js middleware)
-- `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag for the library badge, `h264`
-  when the game has its H.264 copy video.h264.mp4, plus the
+- `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag for the library badge, plus the
   viewer state: `bookmarked`, `position`, `duration`, `watchedAt`; nulls when absent; a corrupt
   viewer_state.json reads as empty)
 - `POST /api/state` - merge viewer state into `videos/<id>/viewer_state.json` (body: {videoId,

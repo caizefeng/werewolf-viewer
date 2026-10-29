@@ -98,7 +98,7 @@ The server listens on the whole local network, so a phone or tablet on the same 
 - **Turned sideways, or on a tablet.** The panels slide out from the video's edges when you tap their tabs, and a tap anywhere else closes them. A tap on the video brings up the controls; once they show, a tap plays or pauses.
 - **Touch controls.** Drag the progress bar with a finger, or skip with the −10 / +10 buttons. *✎ Edit → Show edit handles* brings out the handles and × buttons that a mouse finds by hovering, so night phases and masks can be edited by touch too.
 - **Fullscreen keeps the masks.** An iPhone can make only a bare video fullscreen, in its own player, where neither the masks nor the night overlay can follow. So there the viewer fills the screen itself, and turning the phone sideways fills it with the video. Picture-in-picture and casting are switched off for the same reason: both would show the video unmasked. Added to the home screen, the viewer opens without Safari's toolbars.
-- **A copy for iPhones.** Downloads are AV1 with Opus audio, the best YouTube serves at 1080p60. Every browser on an iPhone is Safari underneath, which plays AV1 only on devices with an AV1 decoder (iPhone 15 Pro and later, Macs with an M3 or later) and Opus inside MP4 not at all. So each download also fetches YouTube's own H.264 version with AAC audio (about a quarter larger than the AV1 file), and those browsers play that; the analysis keeps using the AV1 file. For games downloaded before this existed, `python3 processing/download.py --h264-copy --all` fetches their copies. A game that still can't play says why on the video instead of staying black.
+- **One format for every browser.** Downloads are YouTube's H.264 version with AAC audio, which every browser plays, iPhones included. YouTube's AV1 version is about a fifth smaller, but an iPhone plays AV1 only from the iPhone 15 Pro on, and Safari can't play its Opus audio inside MP4 at all. Night, card-viewing and role detection give the same results on both. A game whose video still can't play says why on the video instead of staying black.
 
 | Upright | Sideways, fullscreen |
 |---|---|
@@ -126,7 +126,7 @@ The server listens on the whole local network, so a phone or tablet on the same 
 |---|---|---|
 | CPU | Any of the above; fewer or slower cores just take longer | 8 cores or more: one analysis keeps 5 to 8 busy |
 | Memory | 8 GB, with one analysis at a time (`WEREWOLF_MAX_ANALYSES=1`) | 16 GB: an analysis peaks near 3 GB, two at once near 6 GB |
-| Disk | 1.5 GB for the Python environment, OCR models and web packages | Plus about 3 GB per hour of video: the 1080p60 AV1 download (0.8 to 1.9 GB per hour) and its H.264 copy for iPhones (about 1.7 GB per hour) |
+| Disk | 1.5 GB for the Python environment, OCR models and web packages | Plus about 1.7 GB per hour of video (YouTube's 1080p60 H.264) |
 | GPU | Not needed | |
 
 Everything runs on the CPU by default. With the CUDA build of PaddlePaddle the OCR runs on an NVIDIA GPU (untested here), but video decoding stays on the CPU. Apple GPUs are not used.
@@ -182,7 +182,6 @@ The command line does the same work as the UI:
 
 ```bash
 python3 processing/download.py --video-id="VIDEO_ID"     # quote IDs that start with a dash
-python3 processing/download.py --h264-copy --all         # H.264 copies (iPhones) for games without one
 python3 processing/analyze.py --video-id="VIDEO_ID"      # writes videos/VIDEO_ID/metadata.json
 python3 processing/analyze.py --video-id="VIDEO_ID" --keep-edits   # re-analyse, keep edited nights / masks
 python3 processing/update_role_maps.py [VIDEO_ID ...]    # re-scan roles only, keeps manual edits

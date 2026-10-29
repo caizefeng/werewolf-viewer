@@ -749,8 +749,8 @@ bottom edge differs by < 24 levels).
   later; M3 Macs) and takes no Opus in MP4 at all (Playwright's WebKit: canPlayType "" for
   `audio/mp4; codecs="opus"`). So download.py also fetches YouTube's own H.264 + AAC version
   (`bestvideo[vcodec^=avc1][height<=1080][fps<=60]+bestaudio[acodec^=mp4a]`: formats 299 + 140,
-  ~3.6 Mbit/s against AV1's 2.6-2.9: 1.71 GB per hour vs 1.27 over the 10 library games, 1.2-1.6x
-  per game; moov first via `-movflags +faststart`) as
+  ~3.6 Mbit/s against AV1's 2.6-2.9: 1.71 GB per hour vs 1.35 over the 10 library games, 1.27x overall,
+  1.19-1.45x per game; moov first via `-movflags +faststart`) as
   `video.h264.mp4`, non-fatal when YouTube has none. Checked on fMxD6khxj2Q: same video duration to
   the microsecond (3547.266667 s), same frames at the same times (mean difference ~1.7/255), so every
   stored time holds for both files. Local conversion was the alternative: VideoToolbox H.264/HEVC ran

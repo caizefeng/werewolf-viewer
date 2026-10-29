@@ -53,6 +53,9 @@
           <video id="video" preload="metadata" playsinline webkit-playsinline disablepictureinpicture
                  disableremoteplayback x-webkit-airplay="deny"></video>
 
+          <!-- Why the video cannot play here (player.js _showVideoMessage) -->
+          <div id="video-message" class="overlay hidden"></div>
+
           <!-- Night phase overlay -->
           <div id="night-overlay" class="overlay hidden">
             <span class="night-text">Night</span>

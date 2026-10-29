@@ -345,7 +345,10 @@ export default defineConfig({
                     const meta = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf-8"));
                     hiddenRoles = !!meta.hidden_roles;
                   } catch {}
-                  return { id: d.name, title, hiddenRoles, ...viewerStateView(readViewerState(dir)) };
+                  // h264: the game has download.py's H.264 + AAC copy, which
+                  // browsers that cannot play the AV1/Opus original get
+                  const h264 = fs.existsSync(path.join(dir, "video.h264.mp4"));
+                  return { id: d.name, title, hiddenRoles, h264, ...viewerStateView(readViewerState(dir)) };
                 });
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify(dirs));

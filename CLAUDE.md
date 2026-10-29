@@ -38,7 +38,8 @@ werewolf_viewer/
 │   └── download.py        # YouTube video downloader via yt-dlp
 ├── videos/                # Downloaded videos + metadata (not in git)
 │   └── <video-id>/
-│       ├── video.mp4      # Downloaded video file
+│       ├── video.mp4      # Downloaded video file (AV1 + Opus; what the analysis reads)
+│       ├── video.h264.mp4 # YouTube's H.264 + AAC version, for browsers without AV1 (iPhones)
 │       ├── info.json      # {title, video_id} from YouTube
 │       ├── metadata.json  # {night_phases, name_masks, role_map, ...} from analysis
 │       └── viewer_state.json  # {bookmarked, position, duration, ...} bookmark + resume point
@@ -82,6 +83,9 @@ eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
 # (an interrupted merge can't leave a truncated video.mp4 blocking re-download)
 source processing/venv/bin/activate
 python3 processing/download.py --video-id="VIDEO_ID"
+# It then also fetches YouTube's H.264 + AAC version as video.h264.mp4 (for
+# iPhones; see "AV1 and the H.264 copies"). For games downloaded without one:
+python3 processing/download.py --h264-copy --video-id="VIDEO_ID"   # or --all
 
 # If downloads fail with "Requested format is not available" or SABR warnings,
 # yt-dlp is stale — YouTube breaks old versions quickly. Update it with:
@@ -153,7 +157,8 @@ The user watches games on the server while development goes on, so there are two
   change restarts it and drops in-memory jobs, hence the refusal while `/api/job-status` shows an
   active job; `--force` overrides). Never edit files under `.prod/`.
 - **dev** (`scripts/start.sh dev`, port 5174): runs from this working tree (hot reload) with
-  `WEREWOLF_VIDEOS_DIR=videos-dev`. `scripts/dev-library.sh ID...|--all` hard-links video.mp4 and
+  `WEREWOLF_VIDEOS_DIR=videos-dev`. `scripts/dev-library.sh ID...|--all` hard-links video.mp4 (and
+  video.h264.mp4) and
   copies info.json/metadata.json, so dev analyses, edits and deletes never touch production.
   `VITE_INSTANCE=dev` makes the page say "dev" (header badge, amber top rule, tab title).
 - Both bind 0.0.0.0. The e2e tests start their own throwaway servers on free ports.
@@ -738,9 +743,23 @@ bottom edge differs by < 24 levels).
 - The video has `playsinline` (without it an iPhone plays it in its own fullscreen player: no masks, no
   night overlay), `disablepictureinpicture`, `disableremoteplayback` and `x-webkit-airplay="deny"`
   (picture-in-picture and casting would show it unmasked); the wrapper has `-webkit-touch-callout: none`
-- **AV1**: the library is AV1 1080p60 + Opus. Safari decodes AV1 only with an AV1 hardware decoder
-  (iPhone 15 Pro and later, M3 Macs and later); the `error` handler says so (canPlayType check) instead
-  of leaving a black box. H.264 downloads would play everywhere but change the pipeline: not done
+- **AV1 and the H.264 copies** (user report 2026-10-28, iPhone 14 + Chrome: "when i hit the play
+  button nothing happens, the canvas still all black"): the downloads are AV1 1080p60 + Opus, and every
+  iOS browser is WebKit, which decodes AV1 only with an AV1 hardware decoder (A17 Pro: iPhone 15 Pro and
+  later; M3 Macs) and takes no Opus in MP4 at all (Playwright's WebKit: canPlayType "" for
+  `audio/mp4; codecs="opus"`). So download.py also fetches YouTube's own H.264 + AAC version
+  (`bestvideo[vcodec^=avc1][height<=1080][fps<=60]+bestaudio[acodec^=mp4a]`: formats 299 + 140,
+  ~3.6 Mbit/s, about the AV1 file's size again; moov first via `-movflags +faststart`) as
+  `video.h264.mp4`, non-fatal when YouTube has none. Checked on fMxD6khxj2Q: same video duration to
+  the microsecond (3547.266667 s), same frames at the same times (mean difference ~1.7/255), so every
+  stored time holds for both files. Local conversion was the alternative: VideoToolbox H.264/HEVC ran
+  3.75x real time (~16 min per hour of video, AV1 decoding the bottleneck) against ~1 min to download.
+  The analysis keeps reading video.mp4. /api/videos reports `h264`; the player (`PLAYS_ORIGINAL`,
+  canPlayType of `video/mp4; codecs="av01.0.09M.08, opus"`) starts such a browser on the copy, any
+  browser falls back to it when the original fails (`_cannotPlay`, at the same position; a refused
+  play() counts only while the same source is loaded), and with nothing playable `#video-message`
+  says why on the video itself (the status-line note went unnoticed), naming the command that fetches
+  a missing copy. The 10 library games got theirs 2026-10-28 (`--h264-copy --all`)
 - Home screen: manifest.webmanifest + the apple-mobile-web-app meta tags (standalone, no Safari bars);
   `viewport-fit=cover` with safe-area insets on #app and on the fullscreen controls and panel tabs. iOS
   ignores `background-attachment: fixed`, so on `(hover: none)` the backdrop image is drawn on the
@@ -766,14 +785,17 @@ bottom edge differs by < 24 levels).
   stars, header counts, filter + empty hint, resume save/restore/Start over, periodic and pause
   saves, switch and tab-close saves, watched games, another device, touch, survival of
   re-analysis, deletion and re-download). The bookmark suite runs a re-analysis and a re-download,
-  so a full run takes several minutes. `mobile` (2026-10-28, 51 checks, ~50 s): an upright phone
+  so a full run takes several minutes. `mobile` (2026-10-28, 56 checks, ~70 s): an upright phone
   (layout order, no sideways scroll, inline-video attributes, controls below the video, overlays on the
   video only, 34px targets, taps, ±10 s, a finger dragging the progress bar, docked panels, seat grid,
   no invisible ×, Library/Search tabs, jump back to the player, a night handle and a mask edge dragged
   by touch, browser fullscreen), an iPhone without the Fullscreen API (the stand-in, its panels and
   taps), the phone turned sideways (one-line controls even for an hour-long game), a tablet, and a
-  1366 laptop without any of it. Touch drags are CDP touch events on Chromium; `--webkit` (for this
-  suite: the others expect Chromium's Fullscreen API) replays them as touch-type pointer events
+  1366 laptop without any of it; then the H.264 copies on fixtures (a copy, a broken original with a
+  copy, a broken original without): picked up front without AV1 + Opus (simulated iPhone 14, and
+  WebKit as it is), a fallback when the original fails, the message on the video. Touch drags are CDP
+  touch events on Chromium; `--webkit` (for this suite: the others expect Chromium's Fullscreen API)
+  replays them as touch-type pointer events
 - **Run mutating UI tests here, not against the real server**: the earlier scratch walks used the
   real library and left `original_*` fields in metadata.json (which mark user corrections); the
   scratch scripts under /tmp were also purged by macOS after a few days, hence the move into the repo
@@ -812,7 +834,8 @@ bottom edge differs by < 24 levels).
   footage, titles or players appear in the repository
 
 ## API Endpoints (vite.config.js middleware)
-- `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag for the library badge, plus the
+- `GET /api/videos` - list videos with metadata.json (`hiddenRoles` flag for the library badge, `h264`
+  when the game has its H.264 copy video.h264.mp4, plus the
   viewer state: `bookmarked`, `position`, `duration`, `watchedAt`; nulls when absent; a corrupt
   viewer_state.json reads as empty)
 - `POST /api/state` - merge viewer state into `videos/<id>/viewer_state.json` (body: {videoId,

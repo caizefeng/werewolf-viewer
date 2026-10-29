@@ -683,6 +683,26 @@ body.instance-dev {
   pointer-events: none;
 }
 
+/* Why the video cannot play here (player.js _cannotPlay): over the black
+   video, under the panels and the controls */
+#video-message {
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 12%;
+  background: rgba(8, 7, 14, 0.85);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+#video-message.hidden {
+  display: none;
+}
+
 /* ── Name mask overlays ── */
 #name-masks {
   position: absolute;
@@ -2647,6 +2667,7 @@ html.pseudo-fs body {
 
   /* ...so the overlays cover the video only, not the bar below it */
   #video-wrapper:not(.is-fs) > #night-overlay,
+  #video-wrapper:not(.is-fs) > #video-message,
   #video-wrapper:not(.is-fs) > #name-masks {
     height: auto;
     aspect-ratio: var(--video-aspect, 16 / 9);

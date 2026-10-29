@@ -34,6 +34,7 @@ function getElements() {
     resetNightsBtn: document.getElementById("reset-nights-btn"),
     nightJumpButtons: document.getElementById("night-jump-buttons"),
     rolePanel: document.getElementById("role-panel"),
+    videoMessage: document.getElementById("video-message"),
     controls: document.getElementById("custom-controls"),
     backBtn: document.getElementById("back-btn"),
     fwdBtn: document.getElementById("fwd-btn"),
@@ -104,6 +105,8 @@ function toggleGroup(key) {
 // POST /api/state) so it follows the user across devices on the LAN.
 // libState: videoId -> {bookmarked, position, duration, watchedAt}
 const libState = new Map();
+// Games that have download.py's H.264 + AAC copy (video.h264.mp4)
+const h264Copies = new Set();
 const RESUME_MIN = 30;                       // s; earlier positions count as "not started"
 const FILTER_KEY = "werewolf.libfilter.starred";
 
@@ -348,8 +351,10 @@ async function loadVideoList() {
       return ka.prefix.localeCompare(kb.prefix, "zh") || ka.game - kb.game;
     });
     libState.clear();
+    h264Copies.clear();
     for (const v of videos) {
       libState.set(v.id, { bookmarked: !!v.bookmarked, position: v.position, duration: v.duration, watchedAt: v.watchedAt });
+      if (v.h264) h264Copies.add(v.id);
     }
 
     // Group by episode: one header per SxxEyy (with its broadcast date and
@@ -524,7 +529,7 @@ async function switchVideo(videoId) {
   const loaded = await player.loadMetadata(`/${videoId}/metadata.json`);
   if (loaded) {
     const at = resumePoint(libState.get(videoId));
-    player.loadVideo(`/${videoId}/video.mp4`);
+    player.loadVideo(`/${videoId}/video.mp4`, h264Copies.has(videoId) ? `/${videoId}/video.h264.mp4` : null);
     if (at !== null) {
       const video = document.getElementById("video");
       video.addEventListener("loadedmetadata", () => {

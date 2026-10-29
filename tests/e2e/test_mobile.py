@@ -4,7 +4,10 @@ dragged progress bar, ±10 s), the PHASES / ROLES panels (docked below the
 player on an upright phone, tapped open over the video elsewhere), overlays
 that cover the video and nothing else, the browser's fullscreen and the
 stand-in an iPhone gets (no Fullscreen API there), the edit handles a finger
-needs, a phone turning round, and a desktop width that must stay as it was.
+needs, a phone turning round, a desktop width that must stay as it was, and the
+H.264 copies (video.h264.mp4) browsers without AV1 + Opus play: picked up front
+on such a browser, a fallback when the original fails, a message on the video
+when nothing can play.
 
 Taps are real touch input (Playwright's tap), and so are drags on Chromium
 (CDP touch events): the page sees pointerType "touch" as on a phone. WebKit
@@ -12,6 +15,7 @@ Taps are real touch input (Playwright's tap), and so are drags on Chromium
 events on the element under the finger, its moves and lift sent to that same
 element as a pointer capture would."""
 import json
+import shutil
 
 from harness import G1, G2, G3, active_id, current_time, open_app, watch_errors
 
@@ -24,6 +28,12 @@ for (const name of ["requestFullscreen", "webkitRequestFullscreen"]) {
   Object.defineProperty(Element.prototype, name, {value: undefined, configurable: true});
 }
 Object.defineProperty(Document.prototype, "fullscreenEnabled", {get: () => false, configurable: true});
+"""
+# iPhone 14 (no AV1 decoder; WebKit takes no Opus in MP4): the library's
+# AV1 + Opus originals are unplayable there
+NO_AV1 = """
+const canPlay = HTMLMediaElement.prototype.canPlayType;
+HTMLMediaElement.prototype.canPlayType = function (type) { return /av01|opus/.test(type) ? "" : canPlay.call(this, type); };
 """
 
 
@@ -404,6 +414,55 @@ def run(base, run_dir, C, browser):
     pg.wait_for_timeout(500)
     C.check("tablet: the ROLES tab opens on a tap", _open(pg, "role-panel") and _parent(pg, "#role-panel") == "video-wrapper")
     C.check("tablet: no page or console errors", not errs, "; ".join(errs)[:300])
+    ctx.close()
+
+    # ── H.264 copies ──
+    # Fixtures in this suite's copy of the library: game 1 gets a copy (the
+    # demo's own H.264 file), game 3 a broken original and a working copy,
+    # game 2 a broken original and no copy
+    shutil.copy(run_dir / G1 / "video.mp4", run_dir / G1 / "video.h264.mp4")
+    shutil.copy(run_dir / G3 / "video.mp4", run_dir / G3 / "video.h264.mp4")
+    for vid in (G3, G2):
+        (run_dir / vid / "video.mp4").write_bytes(b"\0" * 200_000)
+
+    def open_game(pg, vid):
+        pg.tap(f'#video-list li[data-id="{vid}"] .video-title')
+        pg.wait_for_timeout(2500)
+        return pg.evaluate("""(() => { const v = document.getElementById('video'), m = document.getElementById('video-message');
+            return {src: v.currentSrc.split('/').slice(-2).join('/'), ready: v.readyState,
+                    message: m.classList.contains('hidden') ? null : m.textContent}; })()""")
+
+    ctx = browser.new_context(**PHONE)
+    ctx.add_init_script(NO_AV1)
+    pg = ctx.new_page()
+    open_app(pg, base)
+    st = open_game(pg, G1)
+    C.check("no AV1 (iPhone 14): a game with an H.264 copy plays the copy",
+            st["src"] == f"{G1}/video.h264.mp4" and st["ready"] >= 1 and not st["message"], str(st))
+    st = open_game(pg, G2)
+    C.check("no AV1: a game without a copy says so on the video, with the command that fetches one",
+            st["message"] and "no H.264 copy" in st["message"] and f"--h264-copy --video-id={G2}" in st["message"]
+            and _style(pg, "#video-message", "display") != "none", str(st))
+    ctx.close()
+
+    # This engine as it is: Chromium plays AV1 + Opus; WebKit takes no Opus
+    # in MP4 (so a real Safari, even with an AV1 decoder, gets the copies)
+    ctx = browser.new_context(**PHONE)
+    pg = ctx.new_page()
+    open_app(pg, base)
+    plays = pg.evaluate("document.createElement('video').canPlayType('video/mp4; codecs=\"av01.0.09M.08, opus\"') !== ''")
+    st = open_game(pg, G1)
+    want = "video.mp4" if plays else "video.h264.mp4"
+    C.check(f"this browser ({'plays' if plays else 'cannot play'} AV1 + Opus) loads the {want}",
+            st["src"] == f"{G1}/{want}" and st["ready"] >= 1, str(st))
+    st = open_game(pg, G3)
+    C.check("an original that fails to load falls back to the H.264 copy" if plays
+            else "a broken original is never tried: the copy plays",
+            st["src"] == f"{G3}/video.h264.mp4" and st["ready"] >= 1 and not st["message"], str(st))
+    st = open_game(pg, G2)
+    C.check("nothing to play: the message says why",
+            st["message"] and (st["message"].startswith("The video failed to load") if plays
+                               else "no H.264 copy" in st["message"]), str(st))
     ctx.close()
 
     # ── A laptop stays as it was ──

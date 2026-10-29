@@ -749,7 +749,8 @@ bottom edge differs by < 24 levels).
   later; M3 Macs) and takes no Opus in MP4 at all (Playwright's WebKit: canPlayType "" for
   `audio/mp4; codecs="opus"`). So download.py also fetches YouTube's own H.264 + AAC version
   (`bestvideo[vcodec^=avc1][height<=1080][fps<=60]+bestaudio[acodec^=mp4a]`: formats 299 + 140,
-  ~3.6 Mbit/s, about the AV1 file's size again; moov first via `-movflags +faststart`) as
+  ~3.6 Mbit/s against AV1's 2.6-2.9: 1.71 GB per hour vs 1.27 over the 10 library games, 1.2-1.6x
+  per game; moov first via `-movflags +faststart`) as
   `video.h264.mp4`, non-fatal when YouTube has none. Checked on fMxD6khxj2Q: same video duration to
   the microsecond (3547.266667 s), same frames at the same times (mean difference ~1.7/255), so every
   stored time holds for both files. Local conversion was the alternative: VideoToolbox H.264/HEVC ran
@@ -759,7 +760,10 @@ bottom edge differs by < 24 levels).
   browser falls back to it when the original fails (`_cannotPlay`, at the same position; a refused
   play() counts only while the same source is loaded), and with nothing playable `#video-message`
   says why on the video itself (the status-line note went unnoticed), naming the command that fetches
-  a missing copy. The 10 library games got theirs 2026-10-28 (`--h264-copy --all`)
+  a missing copy. The 10 library games got theirs 2026-10-28 (`--h264-copy --all`, 21 GB; each
+  checked: H.264 1080p60 + AAC, video duration equal to the original's). Same day, on fMxD6khxj2Q and
+  40WQgtMozXM (both GT), the night + card analysis on the H.264 copy gave the AV1 results exactly, the
+  scan 1.5-1.6x faster (67 vs 110 s, 98 vs 146 s); no R/G sample changed side of 2.5 (max |diff| 0.07)
 - Home screen: manifest.webmanifest + the apple-mobile-web-app meta tags (standalone, no Safari bars);
   `viewport-fit=cover` with safe-area insets on #app and on the fullscreen controls and panel tabs. iOS
   ignores `background-attachment: fixed`, so on `(hover: none)` the backdrop image is drawn on the

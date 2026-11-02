@@ -9,12 +9,13 @@ import sys
 import tempfile
 
 from analyze_night import analyze_phases
+from platform_compat import replace_file, venv_python as venv_python_path
 
 
 def _print_log_tail(log_path, lines=15):
     """Print the last lines of a subprocess log for error context."""
     try:
-        with open(log_path, "r", errors="replace") as f:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             tail = [l.rstrip() for l in f if l.strip()][-lines:]
     except OSError:
         return
@@ -48,7 +49,7 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
     video_dir = os.path.dirname(video_path)
     video_file = os.path.basename(video_path)
     processing_dir = os.path.dirname(os.path.abspath(__file__))
-    venv_python = os.path.join(processing_dir, "venv", "bin", "python3")
+    venv_python = venv_python_path(processing_dir)
 
     print("=" * 60)
     print("WEREWOLF VIEWER - Video Analysis Pipeline")
@@ -80,12 +81,12 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
         try:
             # Subprocess output goes to a log file (avoids interleaving with
             # night detection output; printed on failure for diagnosis)
-            with open(name_log_path, "w") as log_f:
+            with open(name_log_path, "w", encoding="utf-8") as log_f:
                 name_proc = subprocess.Popen(
                     [venv_python, "-c",
                      f"import json; from analyze_names import analyze_name_regions_full; "
                      f"r = analyze_name_regions_full({video_path!r}); "
-                     f"open({name_tmp.name!r}, 'w').write(json.dumps(r, default=str))"],
+                     f"open({name_tmp.name!r}, 'w', encoding='utf-8').write(json.dumps(r, default=str))"],
                     cwd=processing_dir,
                     stdout=log_f, stderr=subprocess.STDOUT,
                 )
@@ -104,7 +105,7 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
             print("--- Character Name Detection ---")
             if name_proc.returncode == 0:
                 try:
-                    with open(name_tmp.name, "r") as f:
+                    with open(name_tmp.name, "r", encoding="utf-8") as f:
                         name_result = json.load(f)
                     print(f"  Name detection completed "
                           f"({len(name_result['name_masks'])} mask regions, "
@@ -153,7 +154,7 @@ def run_analysis(video_path, sequential=False, num_workers=0, keep_edits=False):
     tmp_path = metadata_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, metadata_path)
+    replace_file(tmp_path, metadata_path)
 
     print("=" * 60)
     print(f"Analysis complete!")

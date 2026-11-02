@@ -1,0 +1,5 @@
+# Git for Windows defaults to core.autocrlf=true, which would break the shell
+# scripts under bash; cmd.exe, in turn, can misread batch files with bare LF.
+*.sh  text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

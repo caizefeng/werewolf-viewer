@@ -1,7 +1,11 @@
 # [default] pulls yt-dlp-ejs, the JS challenge solver YouTube requires
-# (needs a JS runtime on PATH too: brew install deno)
+# (needs a JS runtime on PATH too: brew install deno / winget install DenoLand.Deno)
 yt-dlp[default]
 # PP-OCRv6 medium needs paddleocr >= 3.7.0 (tested stack below)
 paddleocr==3.7.0
-paddlepaddle==3.3.1
-opencv-python
+# Windows builds have oneDNN, which makes OCR 15x faster, and 3.3 crashes in it
+# on the detection model (ConvertPirAttribute2RuntimeAttribute not support ...)
+paddlepaddle==3.3.1; sys_platform != "win32"
+paddlepaddle==3.2.2; sys_platform == "win32"
+# paddlex brings opencv-contrib-python 4.10 as well; both install into cv2/
+opencv-python<5

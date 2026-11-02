@@ -6,6 +6,7 @@
     processing/venv/bin/python3 tests/e2e/run.py --fresh      # re-render/re-analyse the demo games
     processing/venv/bin/python3 tests/e2e/run.py mobile --webkit   # phones on Safari's engine
 
+(On Windows the interpreter is processing\venv\Scripts\python.exe.)
 Needs Playwright in processing/venv (pip install -r tests/requirements.txt;
 playwright install chromium; playwright install webkit for --webkit). Never
 touches videos/: every suite gets a fresh copy of the synthetic demo library

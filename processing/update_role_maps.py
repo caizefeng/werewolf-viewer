@@ -19,6 +19,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from analyze_names import analyze_name_regions_full
+from platform_compat import replace_file
 
 VIDEOS_DIR = os.environ.get("WEREWOLF_VIDEOS_DIR") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "videos")
@@ -41,7 +42,7 @@ def update(video_id):
     tmp = meta_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, meta_path)
+    replace_file(tmp, meta_path)
     rows = sum(len(v) for v in result["role_map"].values())
     print(f"{video_id}: role_map {rows} rows, hidden_roles={result['hidden_roles']} ({time.time() - t0:.0f}s)")
     return True

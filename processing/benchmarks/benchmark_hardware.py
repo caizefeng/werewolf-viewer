@@ -10,14 +10,13 @@ analyze.py together with its OCR subprocess).
 --together runs the games side by side, as the server's two analysis slots
 do; on macOS the taskpolicy prefix keeps a run on the efficiency cores. Put
 "--" before IDs that start with a dash. Each game is analysed through a
-symlink in a temporary library, so its real metadata.json (and any edits in
-it) is never touched.
+symlink (hard link on Windows, where symlinks need elevation) in a temporary
+library, so its real metadata.json (and any edits in it) is never touched.
 """
 
 import argparse
 import os
 import platform
-import resource
 import shlex
 import shutil
 import subprocess
@@ -27,12 +26,20 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PYTHON = os.path.join(ROOT, "processing", "venv", "bin", "python3")
+sys.path.insert(0, os.path.join(ROOT, "processing"))
+from platform_compat import WINDOWS, venv_python  # noqa: E402
+
+PYTHON = venv_python(os.path.join(ROOT, "processing"))
 
 try:
     import psutil   # installed with PaddleOCR; without it memory isn't reported
 except ImportError:
     psutil = None
+
+try:
+    import resource
+except ImportError:   # Windows: CPU time comes from psutil's samples instead
+    resource = None
 
 
 def machine():
@@ -41,6 +48,10 @@ def machine():
         if sys.platform == "darwin":
             cpu = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
                                  capture_output=True, text=True).stdout.strip() or cpu
+        elif WINDOWS:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                cpu = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip() or cpu
         else:
             with open("/proc/cpuinfo") as f:
                 cpu = next((l.split(":", 1)[1].strip() for l in f if l.startswith("model name")), cpu)
@@ -70,21 +81,22 @@ def fmt_dur(s):
 
 
 class Run:
-    """One analyze.py process on a symlinked copy of a game."""
+    """One analyze.py process on a linked copy of a game."""
 
     def __init__(self, video_id, library, prefix, extra):
         self.video_id = video_id
         self.src = os.path.join(ROOT, "videos", video_id, "video.mp4")
         os.makedirs(os.path.join(library, video_id))
-        os.symlink(self.src, os.path.join(library, video_id, "video.mp4"))
+        (os.link if WINDOWS else os.symlink)(self.src, os.path.join(library, video_id, "video.mp4"))
         cmd = (shlex.split(prefix) + [PYTHON, os.path.join(ROOT, "processing", "analyze.py"),
                                       f"--video-id={video_id}"] + shlex.split(extra))
         env = dict(os.environ, WEREWOLF_VIDEOS_DIR=library, PYTHONUNBUFFERED="1")
         self.start = time.perf_counter()
-        self.proc = subprocess.Popen(cmd, cwd=ROOT, env=env, text=True,
+        self.proc = subprocess.Popen(cmd, cwd=ROOT, env=env, encoding="utf-8", errors="replace",
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.decode = self.wall = None
         self.peak = 0
+        self.cpu = {}   # pid -> CPU seconds at its last sample (no getrusage on Windows)
         self.tail = []
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
@@ -109,6 +121,8 @@ class Run:
             for p in [root] + root.children(recursive=True):
                 try:
                     rss += p.memory_info().rss
+                    times = p.cpu_times()
+                    self.cpu[p.pid] = times.user + times.system
                 except psutil.Error:
                     pass
         except psutil.Error:
@@ -129,10 +143,14 @@ def main():
         sys.exit(f"Not downloaded: {', '.join(missing)}")
 
     print(f"Machine: {machine()}")
-    library = tempfile.mkdtemp(prefix="werewolf-bench-")
+    # A hard link can't leave its volume, so on Windows the library goes next to videos\
+    tmp_parent = os.path.join(ROOT, ".run") if WINDOWS else None
+    if tmp_parent:
+        os.makedirs(tmp_parent, exist_ok=True)
+    library = tempfile.mkdtemp(prefix="werewolf-bench-", dir=tmp_parent)
     try:
         for group in ([a.video_ids] if a.together else [[v] for v in a.video_ids]):
-            before = resource.getrusage(resource.RUSAGE_CHILDREN)
+            before = resource.getrusage(resource.RUSAGE_CHILDREN) if resource else None
             runs = [Run(v, library, a.prefix, a.args) for v in group]
             peak = 0
             while True:
@@ -140,8 +158,11 @@ def main():
                 if all(r.wall is not None for r in runs):
                     break
                 time.sleep(0.5)
-            after = resource.getrusage(resource.RUSAGE_CHILDREN)
-            cpu = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+            if resource:
+                after = resource.getrusage(resource.RUSAGE_CHILDREN)
+                cpu = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+            else:
+                cpu = sum(sum(r.cpu.values()) for r in runs)
             for r in runs:
                 r.reader.join()
                 dur, fmt = video_info(r.src)

@@ -2,7 +2,12 @@ import { defineConfig } from "vite";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
+
+const WINDOWS = process.platform === "win32";
+// A piped Python prints in the ANSI code page, which can't encode the role
+// names on most machines (cp1252); children inherit this
+if (WINDOWS) process.env.PYTHONUTF8 ??= "1";
 
 // WEREWOLF_VIDEOS_DIR points the server at another library (e.g. a demo one)
 const videosDir = process.env.WEREWOLF_VIDEOS_DIR
@@ -13,9 +18,10 @@ const processingDir = path.resolve(__dirname, "../processing");
 // and "downloads" copy them in; analysis runs for real on them
 const DEMO = !!process.env.WEREWOLF_DEMO;
 const demoDir = path.join(processingDir, "demo", "library");
-const venvPython = path.join(processingDir, "venv", "bin", "python3");
+const venvBin = path.join(processingDir, "venv", WINDOWS ? "Scripts" : "bin");
+const venvPython = path.join(venvBin, WINDOWS ? "python.exe" : "python3");
 // Prefer the venv's yt-dlp (kept up to date via pip) over PATH
-const venvYtDlp = path.join(processingDir, "venv", "bin", "yt-dlp");
+const venvYtDlp = path.join(venvBin, WINDOWS ? "yt-dlp.exe" : "yt-dlp");
 const ytDlpBin = fs.existsSync(venvYtDlp) ? venvYtDlp : "yt-dlp";
 
 // ── Jobs ──
@@ -43,7 +49,7 @@ const SEARCH_TAB_LIMIT = 50; // YouTube caps the channel search tab at ~20 anywa
 function ytDlpFlatList(listUrl, limit) {
   return new Promise((resolve, reject) => {
     const args = ["--flat-playlist", "--dump-json", "--playlist-end", String(limit), listUrl];
-    const proc = spawn(ytDlpBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ytDlpBin, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let output = "";
     proc.stdout.on("data", (d) => (output += d));
     proc.stderr.on("data", () => {});
@@ -121,12 +127,16 @@ function finishJob(job, error) {
 
 // Spawn a processing script for a job in its own process group (so a stop
 // can kill python and its yt-dlp/analyze children together), collecting
-// output into the job log.
+// output into the job log. Windows has no process groups (killJobTree goes by
+// parent PID), and `detached` there leaves python without a console, so every
+// console program it starts (yt-dlp, ffmpeg, the OCR subprocess) would open a
+// window of its own; windowsHide gives them one hidden console to share.
 function spawnForJob(job, args, onClose) {
   const proc = spawn(venvPython, args, {
     cwd: processingDir,
     stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
+    detached: !WINDOWS,
+    windowsHide: true,
   });
   job.proc = proc;
   proc.stdout.on("data", (d) => job.log.push(d.toString()));
@@ -215,18 +225,53 @@ function jobView(job) {
   };
 }
 
+function killJobTree(proc) {
+  if (WINDOWS) {
+    // No signals or process groups: taskkill walks down from the job's process
+    // (python.exe in a venv is itself a launcher for the real python). Waits
+    // for it, since files stay locked until their process has gone.
+    spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  } else {
+    // Kill the whole process group (python + yt-dlp/analyze subprocesses)
+    try { process.kill(-proc.pid, "SIGTERM"); } catch {}
+  }
+}
+
+// Remove a game directory. Windows refuses to delete a file something has open
+// (a process just killed, a reader, antivirus), so retry for a few seconds. A
+// throw here would escape the async middleware and take the server down.
+function removeDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    return null;
+  } catch (err) {
+    console.error(`Could not remove ${dir}: ${err.message}`);
+    return err;
+  }
+}
+
+// fs.renameSync that waits out Windows refusing a rename while anything has
+// either file open for a moment (a reader, the indexer, antivirus)
+function replaceFile(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fs.renameSync(from, to);
+    } catch (err) {
+      if (!WINDOWS || attempt >= 20 || !["EPERM", "EACCES", "EBUSY"].includes(err.code)) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
 function stopJob(job) {
   if (job.done) return false;
-  if (job.proc) {
-    // Kill the whole process group (python + yt-dlp/analyze subprocesses)
-    try { process.kill(-job.proc.pid, "SIGTERM"); } catch {}
-  }
+  if (job.proc) killJobTree(job.proc);
   // A stop while downloading discards the partial directory. A stop during
   // (or while waiting for) analysis keeps the expensive finished download;
   // re-running analysis is cheap.
   if (job.phase === "queued" || job.phase === "downloading") {
     const jobDir = path.join(videosDir, job.videoId);
-    if (fs.existsSync(jobDir)) fs.rmSync(jobDir, { recursive: true, force: true });
+    if (fs.existsSync(jobDir)) removeDir(jobDir);
   }
   job.stopped = true;
   finishJob(job, "Stopped by user");
@@ -474,7 +519,8 @@ export default defineConfig({
             if (job && !job.done) return jsonResponse(res, 409, { error: "A job is running for this video; stop it first" });
             const dir = path.join(videosDir, videoId);
             if (!fs.existsSync(dir)) return jsonResponse(res, 404, { error: "Not found" });
-            fs.rmSync(dir, { recursive: true, force: true });
+            const failed = removeDir(dir);
+            if (failed) return jsonResponse(res, 500, { error: `Could not delete: ${failed.message}` });
             // A finished job for a deleted video must not keep showing "Done" in the search rows
             if (job) jobs.delete(videoId);
             return jsonResponse(res, 200, { deleted: true });
@@ -514,7 +560,7 @@ export default defineConfig({
               const text = JSON.stringify(meta, null, 2);
               const tmpPath = metaPath + ".tmp";
               fs.writeFileSync(tmpPath, text);
-              fs.renameSync(tmpPath, metaPath);
+              replaceFile(tmpPath, metaPath);
               return jsonResponse(res, 200, { saved: true, version: metadataVersion(Buffer.from(text)) });
             } catch (err) {
               return jsonResponse(res, 500, { error: err.message });
@@ -558,7 +604,7 @@ export default defineConfig({
               const state = { ...readViewerState(dir), ...update };
               const tmpPath = statePath + ".tmp";
               fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
-              fs.renameSync(tmpPath, statePath);
+              replaceFile(tmpPath, statePath);
               return jsonResponse(res, 200, { videoId, ...viewerStateView(state) });
             } catch (err) {
               return jsonResponse(res, 500, { error: err.message });

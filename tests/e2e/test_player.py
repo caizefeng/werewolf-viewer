@@ -151,7 +151,7 @@ def run(base, run_dir, C, browser):
     pg.wait_for_timeout(200)
     pg.click("#add-phase-btn")
     pg.wait_for_timeout(1200)
-    saved = json.loads((run_dir / G1 / "metadata.json").read_text())
+    saved = json.loads((run_dir / G1 / "metadata.json").read_text(encoding="utf-8"))
     C.check("+ Night phase adds a phase and saves it",
             pg.evaluate("document.querySelectorAll('.night-marker').length") == before + 1 and len(saved["night_phases"]) == before + 1)
     C.check("the detected phases are kept as originals", len(saved.get("original_night_phases", [])) == before)
@@ -159,7 +159,7 @@ def run(base, run_dir, C, browser):
     pg.wait_for_timeout(200)
     pg.click("#reset-nights-btn")
     pg.wait_for_timeout(1200)
-    saved = json.loads((run_dir / G1 / "metadata.json").read_text())
+    saved = json.loads((run_dir / G1 / "metadata.json").read_text(encoding="utf-8"))
     C.check("Reset nights restores the detected phases", len(saved["night_phases"]) == before)
 
     # A page holding an outdated copy must not undo a newer write (a
@@ -171,14 +171,14 @@ def run(base, run_dir, C, browser):
     st, r = api(base, "/api/metadata", {"videoId": G1, "version": "0000000000000000",
                                         "night_phases": saved["night_phases"], "name_masks": saved["name_masks"]})
     C.check("a save against an old version is refused (409)", st == 409 and r.get("stale") is True, f"{st} {r}")
-    newer = json.loads(meta_path.read_text())
+    newer = json.loads(meta_path.read_text(encoding="utf-8"))
     newer["night_phases"] = newer["night_phases"] + [{"start": 395.0, "end": 400.0}]
-    meta_path.write_text(json.dumps(newer, ensure_ascii=False, indent=2))   # e.g. a re-analysis
+    meta_path.write_text(json.dumps(newer, ensure_ascii=False, indent=2), encoding="utf-8")   # e.g. a re-analysis
     ctl(pg, "#edit-menu-btn")
     pg.wait_for_timeout(200)
     pg.click("#add-phase-btn")
     pg.wait_for_timeout(1500)
-    on_disk = json.loads(meta_path.read_text())
+    on_disk = json.loads(meta_path.read_text(encoding="utf-8"))
     C.check("an edit made on an outdated page does not overwrite the newer file",
             on_disk["night_phases"] == newer["night_phases"], str(len(on_disk["night_phases"])))
     st_text = pg.evaluate("document.getElementById('status').textContent")
@@ -190,7 +190,7 @@ def run(base, run_dir, C, browser):
     pg.click("#reset-nights-btn")
     pg.wait_for_timeout(1200)
     C.check("...and its next edit saves normally",
-            len(json.loads(meta_path.read_text())["night_phases"]) == before
+            len(json.loads(meta_path.read_text(encoding="utf-8"))["night_phases"]) == before
             and "saved" in pg.evaluate("document.getElementById('status').textContent"))
 
     ctl(pg, "#fullscreen-btn")

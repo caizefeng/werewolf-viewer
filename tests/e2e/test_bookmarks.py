@@ -138,7 +138,7 @@ def run(base, run_dir, C, browser):
             not errors and s and all(k in s for k in ("bookmarked", "position", "duration", "watchedAt", "bookmarkedAt"))
             and not (run_dir / G3 / "viewer_state.json.tmp").exists(), f"errors={errors[:2]} state={s}")
 
-    (run_dir / G3 / "viewer_state.json").write_text("{not json")
+    (run_dir / G3 / "viewer_state.json").write_text("{not json", encoding="utf-8")
     st, videos = api(base, "/api/videos")
     C.check("API: a corrupt viewer_state.json reads as empty instead of failing the library",
             st == 200 and {v["id"]: v for v in videos}[G3]["position"] is None)

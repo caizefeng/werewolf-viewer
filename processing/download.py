@@ -7,6 +7,8 @@ import os
 import subprocess
 import sys
 
+from platform_compat import WINDOWS, replace_file
+
 
 def format_spec(height):
     """YouTube's H.264 + AAC version (formats 299 + 140 at 1080p60): the one
@@ -23,7 +25,7 @@ def format_spec(height):
 def _yt_dlp_bin():
     """Prefer the venv's yt-dlp (kept up to date via pip) over whatever is
     on PATH — YouTube extraction breaks quickly on stale versions."""
-    candidate = os.path.join(os.path.dirname(sys.executable), "yt-dlp")
+    candidate = os.path.join(os.path.dirname(sys.executable), "yt-dlp.exe" if WINDOWS else "yt-dlp")
     return candidate if os.path.exists(candidate) else "yt-dlp"
 
 
@@ -86,9 +88,11 @@ def download_video(video_id, output_dir, quality="1080"):
 
     # Fetch video title
     try:
+        # UTF-8 both ways: left to the locale, a Windows machine garbles the
+        # Chinese title (or replaces it with ?) on its way through the pipe
         result = subprocess.run(
-            [yt_dlp, "--print", "title", "--no-download", url],
-            capture_output=True, text=True, check=True,
+            [yt_dlp, "--encoding", "utf-8", "--print", "title", "--no-download", url],
+            capture_output=True, encoding="utf-8", check=True,
         )
         title = result.stdout.strip()
     except Exception:
@@ -112,7 +116,7 @@ def download_video(video_id, output_dir, quality="1080"):
 
     print(f"Downloading {url} at {quality}p...")
     _run_yt_dlp(base_cmd)
-    os.replace(partial_path, output_path)
+    replace_file(partial_path, output_path)
     print(f"Downloaded to {output_path}")
     codec = _video_codec(output_path)
     if codec and codec != "h264":

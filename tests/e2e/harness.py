@@ -21,7 +21,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PY = ROOT / "processing" / "venv" / "bin" / "python3"
+WINDOWS = os.name == "nt"
+PY = ROOT / "processing" / "venv" / ("Scripts/python.exe" if WINDOWS else "bin/python3")
 CACHE = ROOT / "tests" / ".cache"
 RENDERED = ROOT / "processing" / "demo" / "library"
 ANALYZED = CACHE / "demo-analyzed"
@@ -70,6 +71,34 @@ def _free_port():
         return s.getsockname()[1]
 
 
+def _start_vite(port, env, out):
+    if WINDOWS:
+        # Vite itself, without bash or pnpm's .cmd shim: node from PATH, else fnm's
+        node = [shutil.which("node")] if shutil.which("node") else ["fnm", "exec", "node"]
+        return subprocess.Popen(node + ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", str(port),
+                                        "--strictPort"], cwd=ROOT / "web", env=env, stdout=out, stderr=subprocess.STDOUT)
+    cmd = ('eval "$(fnm env --shell bash)" && cd web && fnm use --silent-if-unchanged >/dev/null 2>&1; '
+           'corepack enable >/dev/null 2>&1; '
+           f"exec pnpm exec vite --host 127.0.0.1 --port {port} --strictPort")
+    return subprocess.Popen(["bash", "-c", cmd], cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+
+
+def _stop_vite(proc):
+    if WINDOWS:
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+        proc.wait(timeout=10)
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=10)
+    except Exception:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+
 @contextlib.contextmanager
 def demo_server(library):
     """A Vite dev server on a fresh copy of `library`; yields (base_url, run_dir)."""
@@ -78,13 +107,9 @@ def demo_server(library):
     port = _free_port()
     env = {**os.environ, "WEREWOLF_VIDEOS_DIR": str(run_dir), "WEREWOLF_DEMO": "1",
            "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True"}
-    cmd = ('eval "$(fnm env --shell bash)" && cd web && fnm use --silent-if-unchanged >/dev/null 2>&1; '
-           'corepack enable >/dev/null 2>&1; '
-           f"exec pnpm exec vite --host 127.0.0.1 --port {port} --strictPort")
     log_path = CACHE / f"server-{port}.log"
     out = open(log_path, "w")
-    proc = subprocess.Popen(["bash", "-c", cmd], cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT,
-                            start_new_session=True)
+    proc = _start_vite(port, env, out)
     base = f"http://127.0.0.1:{port}"
     try:
         deadline = time.time() + 60
@@ -100,14 +125,7 @@ def demo_server(library):
         yield base, run_dir
     finally:
         wait_jobs_idle(base, timeout=600)
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-            proc.wait(timeout=10)
-        except Exception:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except Exception:
-                pass
+        _stop_vite(proc)
         out.close()
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -145,7 +163,7 @@ def read_state(run_dir, vid):
     """A game's viewer_state.json as a dict, None if absent, "CORRUPT" if unreadable."""
     p = Path(run_dir) / vid / "viewer_state.json"
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
     except ValueError:

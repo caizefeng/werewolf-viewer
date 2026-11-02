@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 
+import platform_compat  # noqa: F401  (UTF-8 output on Windows)
+
 
 RED_THRESH = 2.5   # R/G ratio indicating red ambient light (night, table view)
 ENTRY_BUFFER = 2.0  # seconds the overlay starts before the light turns red

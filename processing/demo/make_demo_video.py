@@ -15,7 +15,7 @@ end. Game 1 also opens like a real broadcast: a still studio shot, then the
 card-viewing tour (看牌) of the twelve seats, cut straight to the first night.
 
 Usage: make_demo_video.py OUT_DIR            # writes OUT_DIR/<id>/video.mp4 + info.json
-Needs ffmpeg on PATH and a CJK font (macOS: STHeiti).
+Needs ffmpeg on PATH and a CJK font (macOS: STHeiti, Windows: Microsoft YaHei).
 """
 import json
 import os
@@ -26,8 +26,11 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 W, H, FPS = 1920, 1080, 30
+WINDOWS_FONTS = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
 FONT_CJK = next((p for p in ("/System/Library/Fonts/STHeiti Medium.ttc", "/System/Library/Fonts/PingFang.ttc",
-                              "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc") if os.path.exists(p)), None)
+                              "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                              os.path.join(WINDOWS_FONTS, "msyh.ttc"), os.path.join(WINDOWS_FONTS, "simsun.ttc"))
+                 if os.path.exists(p)), None)
 if not FONT_CJK:
     sys.exit("No CJK font found")
 

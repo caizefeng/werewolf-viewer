@@ -234,7 +234,7 @@ def run(base, run_dir, C, browser):
     _seek(pg, DAY_T)
 
     # Edit handles: a finger has no hover to reveal them
-    before = json.loads(meta_path.read_text())["night_phases"]
+    before = json.loads(meta_path.read_text(encoding="utf-8"))["night_phases"]
     pg.tap("#edit-menu-btn")
     pg.wait_for_timeout(300)
     C.check("phone: ✎ Edit offers the edit handles", _style(pg, "#edit-handles-btn", "display") != "none")
@@ -247,15 +247,15 @@ def run(base, run_dir, C, browser):
     h = _box(pg, ".night-marker .night-handle.handle-end")
     _touch_drag(pg, h["x"] + h["w"] / 2, h["y"] + h["h"] / 2, h["x"] + h["w"] / 2 + 15, h["y"] + h["h"] / 2)
     pg.wait_for_timeout(1200)
-    after = json.loads(meta_path.read_text())["night_phases"]
+    after = json.loads(meta_path.read_text(encoding="utf-8"))["night_phases"]
     C.check("phone: dragging a night's end handle with a finger moves it and saves",
             after[0]["end"] > before[0]["end"] + 5 and after[0]["start"] == before[0]["start"],
             f"{before[0]} -> {after[0]}")
-    masks0 = json.loads(meta_path.read_text())["name_masks"]
+    masks0 = json.loads(meta_path.read_text(encoding="utf-8"))["name_masks"]
     z = _box(pg, ".name-mask.left .mask-hover-zone")
     _touch_drag(pg, z["x"] + z["w"] / 2, z["y"] + z["h"] / 2, z["x"] + z["w"] / 2 + 20, z["y"] + z["h"] / 2)
     pg.wait_for_timeout(1200)
-    masks1 = json.loads(meta_path.read_text())["name_masks"]
+    masks1 = json.loads(meta_path.read_text(encoding="utf-8"))["name_masks"]
     left0 = next(m for m in masks0 if m["x"] < 0.5)
     left1 = next(m for m in masks1 if m["x"] < 0.5)
     C.check("phone: dragging a mask's inner edge with a finger widens it and saves",
@@ -273,8 +273,8 @@ def run(base, run_dir, C, browser):
     pg.tap("#edit-handles-btn")
     pg.wait_for_timeout(300)
     C.check("phone: Reset nights and Reset masks restore them, and the handles go away again",
-            json.loads(meta_path.read_text())["night_phases"] == before
-            and json.loads(meta_path.read_text())["name_masks"] == masks0
+            json.loads(meta_path.read_text(encoding="utf-8"))["night_phases"] == before
+            and json.loads(meta_path.read_text(encoding="utf-8"))["name_masks"] == masks0
             and _style(pg, ".night-handle", "display") == "none")
 
     # The browser's fullscreen (Android; a browser without the API gets the

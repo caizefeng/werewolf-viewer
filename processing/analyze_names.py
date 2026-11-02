@@ -16,6 +16,8 @@ import cv2
 import numpy as np
 from paddleocr import PaddleOCR
 
+import platform_compat  # noqa: F401  (UTF-8 output on Windows)
+
 # Local model directory (self-contained, no global cache dependency)
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
@@ -843,11 +845,17 @@ def _init_ocr():
 
     # CUDA only; PaddlePaddle has no Apple MPS support
     device = "cpu"
+    onednn_broken = False
     try:
         import paddle
         if paddle.device.is_compiled_with_cuda():
             device = "gpu:0"
             print("  Using GPU (CUDA)")
+        # Paddle 3.3's oneDNN executor crashes on the detection model
+        # (ConvertPirAttribute2RuntimeAttribute not support ...). Without oneDNN
+        # OCR works, 15x slower, which is why requirements.txt pins 3.2.2 on
+        # Windows; this is for a build that has it anyway. Apple builds have none.
+        onednn_broken = paddle.__version__.startswith("3.3.") and paddle.base.core.is_compiled_with_onednn()
     except Exception:
         pass
     if device == "cpu":
@@ -855,6 +863,8 @@ def _init_ocr():
 
     kw = dict(use_doc_orientation_classify=False, use_doc_unwarping=False,
               use_textline_orientation=False, device=device)
+    if onednn_broken:
+        kw["enable_mkldnn"] = False
     if det_dir and rec_dir:
         return PaddleOCR(text_detection_model_dir=det_dir,
                          text_recognition_model_dir=rec_dir, **kw)

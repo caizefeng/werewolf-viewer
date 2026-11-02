@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 from paddleocr import PaddleOCR
 
-import platform_compat  # noqa: F401  (UTF-8 output on Windows)
+from platform_compat import WINDOWS  # importing it also gives UTF-8 output on Windows
 
 # Local model directory (self-contained, no global cache dependency)
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -815,15 +815,22 @@ def _ensure_models():
     print(f"  OCR models {OCR_DET_MODEL} / {OCR_REC_MODEL} not found locally. Downloading...")
     os.makedirs(_MODELS_DIR, exist_ok=True)
     import shutil
-    tmp_ocr = PaddleOCR(
-        lang="ch",
-        text_detection_model_name=OCR_DET_MODEL,
-        text_recognition_model_name=OCR_REC_MODEL,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-    )
-    del tmp_ocr
+    if WINDOWS:
+        # Download only: loading them from the cache would fail for a user
+        # name with non-ASCII characters (see _init_ocr)
+        from paddlex.inference.utils.official_models import official_models
+        for name in dirs:
+            official_models[name]
+    else:
+        tmp_ocr = PaddleOCR(
+            lang="ch",
+            text_detection_model_name=OCR_DET_MODEL,
+            text_recognition_model_name=OCR_REC_MODEL,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+        del tmp_ocr
 
     cache_base = os.path.expanduser("~/.paddlex/official_models")
     for name, dst in dirs.items():
@@ -865,6 +872,18 @@ def _init_ocr():
               use_textline_orientation=False, device=device)
     if onednn_broken:
         kw["enable_mkldnn"] = False
+    if det_dir and rec_dir and WINDOWS and not _MODELS_DIR.isascii():
+        # Paddle's C++ on Windows can't open a path with non-ASCII characters
+        # (a Chinese user or folder name); a relative one is plain ASCII. The
+        # models are read here, once; nothing else depends on the directory
+        # at this point (the corner scan's threads have finished)
+        cwd = os.getcwd()
+        os.chdir(_MODELS_DIR)
+        try:
+            return PaddleOCR(text_detection_model_dir=OCR_DET_MODEL,
+                             text_recognition_model_dir=OCR_REC_MODEL, **kw)
+        finally:
+            os.chdir(cwd)
     if det_dir and rec_dir:
         return PaddleOCR(text_detection_model_dir=det_dir,
                          text_recognition_model_dir=rec_dir, **kw)

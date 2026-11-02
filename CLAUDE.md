@@ -47,7 +47,7 @@ werewolf_viewer/
 │       └── viewer_state.json  # {bookmarked, position, duration, ...} bookmark + resume point
 ├── tests/                 # Browser end-to-end tests on the synthetic demo library
 │   ├── requirements.txt   # playwright
-│   └── e2e/               # harness.py, run.py, test_player.py, test_bookmarks.py, test_mobile.py, readme_screenshots.py
+│   └── e2e/               # harness.py, run.py, test_player.py, test_bookmarks.py, test_mobile.py, test_jobs.py, readme_screenshots.py
 └── web/                   # Vite + vanilla JS frontend
     ├── .node-version      # v24.14.0 (used by fnm)
     ├── package.json       # packageManager field pins pnpm version for corepack
@@ -495,7 +495,10 @@ needs an elevated terminal.
   OCR_REC_MODEL; _ensure_models downloads them into processing/models/ on first use
 - Left + right edge crops are OCR'd in a **single batched `predict()` call** per frame
 - Sets `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` at import (offline-safe, faster init)
-- **Local models**: weights stored in `processing/models/` (self-contained, no global cache dependency)
+- **Local models**: weights stored in `processing/models/` (self-contained, no global cache dependency). The first-run
+  setup runs under a file lock and publishes each model by rename: the main process and the OCR subprocess can get
+  there together, and their rmtree/copytree collided (on Windows one of the two failed in 4 of 4 rounds, once leaving a
+  model with a file missing; 12 of 12 succeed now)
 - **No aux models**: doc orientation, unwarping, textline orientation disabled (designed for scanned docs, hurt video frame detection)
 - **Device fallback**: uses CUDA GPU if available, falls back to CPU (PaddlePaddle has no Apple MPS support)
 - **Sidebar probes first** (probe_sidebar): OCR at 15/25/35/50/65/80/90% of the video. They decide
@@ -889,8 +892,9 @@ bottom edge differs by < 24 levels).
   screenshots drop the mobile emulation (hover/pointer media flip to desktop): shoot the viewport
 
 ## Browser tests (tests/e2e)
-- `processing/venv/bin/python3 tests/e2e/run.py [player|bookmarks|mobile] [--fresh] [--webkit]` (Playwright in
-  processing/venv: `pip install -r tests/requirements.txt`). Each suite gets a **fresh copy of the
+- `processing/venv/bin/python3 tests/e2e/run.py [player|bookmarks|mobile|jobs] [--fresh] [--webkit]` (Playwright in
+  processing/venv: `pip install -r tests/requirements.txt`; on Windows `processing\venv\Scripts\python.exe`, where
+  the harness starts Vite with node directly and stops it with taskkill). Each suite gets a **fresh copy of the
   synthetic demo library** and its own Vite server on a free port (127.0.0.1, `WEREWOLF_DEMO=1`,
   `WEREWOLF_VIDEOS_DIR`), so tests click, edit, bookmark, re-analyse and delete freely and never touch
   videos/. The demo games are rendered and analysed by the real pipeline once and cached in
@@ -914,14 +918,19 @@ bottom edge differs by < 24 levels).
   1366 laptop without any of it; then a video.mp4 that can't play (a fixture of zeros): the message
   on the video, naming the re-download, gone again when another game opens. Touch drags are CDP
   touch events on Chromium; `--webkit` (for this suite: the others expect Chromium's Fullscreen API)
-  replays them as touch-type pointer events
+  replays them as touch-type pointer events. The synthetic finger stops before it lifts: lifted at CDP speed
+  the drag is a fling, and Chromium on Windows drops the next tap as the one stopping the fling (touch
+  events arrive, no click; 0 of 3 taps clicked against 3 of 3). `jobs` (2026-11-02, 18 checks, ~30 s, added with
+  Windows support because no suite covered Stop): a stop during a download and during an analysis ends every process
+  naming the game, removes the partial game or keeps the video, a delete is refused during a job and works right
+  after it, a game can be deleted while its video streams, and a save waits out a reader holding the file open
 - **Run mutating UI tests here, not against the real server**: the earlier scratch walks used the
   real library and left `original_*` fields in metadata.json (which mark user corrections); the
   scratch scripts under /tmp were also purged by macOS after a few days, hence the move into the repo
 
 ## Demo mode (synthetic broadcasts, no real footage)
 - `processing/demo/make_demo_video.py [OUT_DIR]` renders three made-up 12-player games with ffmpeg
-  (H.264): player cards with invented names, role ribbons at the layout the analysis expects,
+  (H.264; the CJK font is STHeiti on macOS, Microsoft YaHei on Windows): player cards with invented names, role ribbons at the layout the analysis expects,
   red-tinted nights with the sidebar hidden, a wolves'-discussion close-up inside a night, and the
   天黑请闭眼 / 天亮请睁眼 banners. One game is a hidden-roles broadcast (未知 ribbons). Since 2026-10-26
   (user request: "a silhouette of a person in the middle, like what happen when people are talking

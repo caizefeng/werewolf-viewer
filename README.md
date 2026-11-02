@@ -276,7 +276,7 @@ Browser end-to-end tests drive the real UI with Playwright against a throwaway s
 
 ```bash
 pip install -r tests/requirements.txt && playwright install chromium   # once, in processing/venv
-python3 tests/e2e/run.py              # player regression walk, bookmarks/resume, phones and tablets
+python3 tests/e2e/run.py              # player regression walk, bookmarks/resume, phones and tablets, jobs
 python3 tests/e2e/run.py bookmarks    # one suite
 python3 tests/e2e/run.py --fresh      # re-analyse the demo games first (after pipeline changes)
 python3 tests/e2e/run.py mobile --webkit   # phones and tablets on WebKit, Safari's engine (playwright install webkit)

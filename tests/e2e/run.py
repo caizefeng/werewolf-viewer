@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import CHROMIUM_ARGS, Checks, demo_server, log, prepare_demo_library  # noqa: E402
 
-SUITES = ("player", "bookmarks", "mobile")
+SUITES = ("player", "bookmarks", "mobile", "jobs")
 
 
 def main():

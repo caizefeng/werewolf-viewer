@@ -11,17 +11,20 @@ Web-based werewolf (狼人杀) tournament video viewer that auto-detects night p
 ```
 werewolf_viewer/
 ├── CLAUDE.md              # This file — keep up to date with changes
+├── .gitattributes         # eol for the scripts (LF .sh, CRLF .cmd/.ps1), whatever core.autocrlf says
 ├── scripts/               # Server instances (see "Server instances" below)
 │   ├── start.sh           # start.sh [prod|dev]: start an instance in the background
 │   ├── stop.sh            # stop.sh [prod|dev]
 │   ├── deploy.sh          # deploy.sh [REF] [--force]: move prod's worktree to a commit
-│   └── dev-library.sh     # dev-library.sh ID... | --all: hard-link games into videos-dev/
+│   ├── dev-library.sh     # dev-library.sh ID... | --all: hard-link games into videos-dev/
+│   └── *.cmd, *.ps1, common.ps1   # Windows versions of the four (see "Native Windows")
 ├── .run/                  # Runtime files: <instance>.pid, <instance>.log (gitignored)
 ├── .prod/                 # Production git worktree, detached at the deployed commit (gitignored)
 ├── videos-dev/            # Dev instance library: hard-linked video.mp4 + copied metadata (gitignored)
 ├── processing/            # Python video analysis scripts
 │   ├── venv/              # Python virtual environment (pyenv + venv)
-│   ├── requirements.txt   # Dependencies: yt-dlp, paddleocr, paddlepaddle, opencv-python
+│   ├── requirements.txt   # Dependencies: yt-dlp, paddleocr, paddlepaddle (3.3.1, 3.2.2 on Windows), opencv-python
+│   ├── platform_compat.py # What differs on Windows: venv path, UTF-8 output, rename retries (no-ops elsewhere)
 │   ├── analyze.py         # Main pipeline: runs night + name analysis (parallel by default)
 │   ├── analyze_night.py   # Night phase detection via R/G color ratio + frame diffs (threaded)
 │   ├── analyze_cards.py   # Card-viewing (看牌) detection: seat tour (camera motion) or 2x2 split screen
@@ -73,6 +76,18 @@ source processing/venv/bin/activate
 # pnpm managed by corepack (bundled with Node), pinned via packageManager in package.json
 # IMPORTANT: must load fnm + enable corepack before running node/pnpm commands
 eval "$(fnm env --use-on-cd)" && corepack enable && cd web && pnpm dev
+```
+
+### Windows (no WSL, no elevated terminal; see "Native Windows" below)
+```powershell
+winget install Git.Git Python.Python.3.11 Schniz.fnm Gyan.FFmpeg DenoLand.Deno Microsoft.VCRedist.2015+.x64
+py -3.11 -m venv processing\venv                 # the interpreter is processing\venv\Scripts\python.exe
+processing\venv\Scripts\python -m pip install -r processing\requirements.txt
+scripts\start.cmd [prod|dev]                     # also scripts\stop.cmd, deploy.cmd, dev-library.cmd
+processing\venv\Scripts\python processing\analyze.py --video-id=VIDEO_ID
+processing\venv\Scripts\python tests\e2e\run.py  # after pip install -r tests\requirements.txt; Scripts\playwright install chromium
+# In a shell without fnm on PATH (new terminal, no profile):
+fnm env --shell powershell | Out-String | Invoke-Expression
 ```
 
 ### Key Commands
@@ -172,6 +187,67 @@ The user watches games on the server while development goes on, so there are two
 - Both bind 0.0.0.0. The e2e tests start their own throwaway servers on free ports.
 - New analysis code reaches production videos only by re-running it over `videos/` (↻ in prod
   after a deploy, or a CLI script); videos with `original_*` fields carry the user's corrections.
+- On Windows the same instances come from `scripts\start.cmd` etc.; `.prod`'s shared directories are
+  junctions instead of symlinks, and stopping a server also ends its running jobs.
+
+## Native Windows (since 2026-11-02)
+User request: "add and test the windows compatibility for this project using this Windows 11 desktop PC ...
+I tend to have a native windows support instead of relying on WSL ... make sure its behavior on MacOS won't
+be affected". Windows code sits behind platform checks (`processing/platform_compat.py`, `WINDOWS` in
+web/vite.config.js and tests/e2e/harness.py) or is a no-op elsewhere; the `.sh` scripts are untouched. No step
+needs an elevated terminal.
+- **Scripts**: `scripts\start.cmd`, `stop.cmd`, `deploy.cmd`, `dev-library.cmd` run the `.ps1` beside them with
+  `-ExecutionPolicy Bypass` (a fresh Windows' Restricted policy refuses .ps1 files; in PowerShell `scripts\start`
+  without the extension picks the .ps1, so always write `.cmd`). `common.ps1`: `$Root`, `Use-Node` (fnm reading
+  web\.node-version when installed, else the node on PATH), `Install-WebPackages` (`corepack pnpm`, because
+  `corepack enable` needs elevation under Program Files; Node 25+ has no corepack, then a pnpm on PATH),
+  `Get-ServerProcess` (a PID file only counts if that process's command line has vite.js: Windows reuses PIDs
+  quickly and stop kills a tree). start.ps1 runs node + vite.js directly inside `cmd /d /c "... > log 2>&1"` under
+  `Start-Process -WindowStyle Hidden` (its own hidden console, so it survives the terminal), waits up to 20 s for
+  the port and prints the log if the server died (strictPort). deploy.ps1 uses junctions for `.prod`'s venv and
+  models (no elevation or Developer Mode); `Remove-Item -Recurse .prod` would follow them, use `git worktree remove
+  --force .prod`. Keep the .ps1 files ASCII (Windows PowerShell reads a file without a BOM in the ANSI code page)
+- **Jobs** (vite.config.js): `spawnForJob` is `detached` only off Windows. There `detached` means DETACHED_PROCESS:
+  python has no console, so each console program it starts (yt-dlp, ffmpeg, the OCR subprocess) would open a window;
+  `windowsHide` (CREATE_NO_WINDOW) gives them one hidden console to share. `process.kill(-pid)` fails with ESRCH there
+  (swallowed: Stop did nothing, then the delete hit locked files), so `killJobTree` runs `taskkill /T /F`
+  synchronously. `removeDir` retries (locks linger a moment) and never throws: an exception in the async middleware
+  is an unhandled rejection that ends the server. A venv's python.exe is a launcher for the real python, so every
+  script is two processes, and `stop.cmd` ends running jobs too, being the same process tree
+- **Encoding**: a redirected or piped Python prints in the ANSI code page, where cp1252 can't encode role names
+  (UnicodeEncodeError on `print("...看牌...")`, the OCR subprocess's log file, a server job). Importing
+  `platform_compat` reconfigures stdout/stderr to UTF-8 and sets PYTHONUTF8 for Python children; vite.config.js sets
+  PYTHONUTF8 for its children. Every `open()` of ours names `encoding="utf-8"`: on this zh-CN PC the default is cp936,
+  so a default-encoding read of metadata.json garbles or raises. Check with `python -X warn_default_encoding`
+- **Paddle**: Windows builds have oneDNN (`paddle.base.core.is_compiled_with_onednn()`; the Mac's 3.3.1 does not), and
+  Paddle 3.3 crashes in its oneDNN executor on the detection model: `(Unimplemented)
+  ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]` at
+  onednn_instruction.cc:118, as soon as OCR runs (the recognition model is fine; `set_mkldnn_op` and deleting single
+  fuse passes don't help, and there is no kernel blacklist flag in this build). Without oneDNN it works but one
+  frame takes 16.5 s and `cpu_threads` has no effect (M4: 7-8 s); on 3.2.2 with oneDNN detection takes 0.2 s against
+  3.1 s and recognition 0.03 s against 0.12 s. So requirements.txt pins 3.2.2 on Windows (env marker; pip reports no
+  change for the Mac's venv), and `_init_ocr` passes `enable_mkldnn=False` for any oneDNN build on 3.3.x
+  (a stale venv; presumably Linux x86 too, untested). Windows pip also installs `opencv-python` next to paddlex's
+  `opencv-contrib-python==4.10.0.84`, both into cv2/; the contrib wheel lands last, as on the Mac (`cv2.__version__`
+  4.10.0 on both), and `opencv-python<5` keeps the unpinned one off the new major version
+- **Non-ASCII paths**: Paddle's C++ on Windows can't open a model file on a path with non-ASCII characters
+  (`(NotFound) Cannot open file ...inference.json`), so a Chinese user or folder name stopped all OCR. `_init_ocr` then
+  loads the models through relative paths from inside processing/models (plain ASCII whatever the directory is
+  called); the first-run download goes through `official_models[name]`, which fetches without loading. OpenCV (FFmpeg
+  backend), Node, yt-dlp and ffmpeg all handle such paths
+- **Path length**: without long paths (the default) `pip install` fails when the clone's path is longer than ~90
+  characters (the longest file, in modelscope, is 134 under site-packages, which is 34 under the clone). Even with
+  long paths on, `LoadLibrary` refuses a DLL over 260 (`DLL load failed ... The filename or extension is too long`), so
+  ~150 is the real limit (numpy.libs' openblas name is the longest, 68)
+- **File locks**: Windows refuses a rename over a file anything has open and a delete of a file open without
+  FILE_SHARE_DELETE (Python's `open`, OpenCV's FFmpeg; Node's own streams share delete, so deleting a game while it
+  streams works). `replaceFile` (vite.config.js) and `replace_file` (platform_compat) retry on Windows
+- **Firewall**: the first start binds 0.0.0.0, and Windows Firewall asks whether node.exe may accept connections. The
+  rule it adds names the node.exe path (fnm's, so a new Node version asks again)
+- **Video and browsers**: Playwright's Chromium, Chrome and Edge all decode the H.264 + AAC downloads on Windows
+- Security: `/..%5c..%5cREADME.md`, `/CON`, `/NUL`, `/C:/Windows/win.ini` and the like fall through to index.html, and
+  Vite's `/@fs/` answers 403. `video.mp4::$DATA` and `METADATA.JSON` reach the same file inside the library, nothing else
+- Not tested: Windows 10, Python 3.12 / 3.13 on Windows, Windows on ARM
 
 ## Algorithm Notes
 

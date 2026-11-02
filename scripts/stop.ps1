@@ -14,14 +14,14 @@ $Instance = if ($args.Count -gt 0) { $args[0] } else { "prod" }
 if ($Instance -notin "prod", "dev") { Write-Host "usage: scripts\stop.cmd [prod|dev]"; exit 2 }
 $PidFile = "$Root\.run\$Instance.pid"
 
-if (-not (Test-Path $PidFile)) {
+if (-not (Test-Path -LiteralPath $PidFile)) {
   Write-Host "No $Instance server PID file found"
   exit 0
 }
 
 $Server = Get-ServerProcess $PidFile
-$Id = (Get-Content $PidFile -TotalCount 1).Trim()
-Remove-Item $PidFile
+$Id = (Get-Content -LiteralPath $PidFile -TotalCount 1).Trim()
+Remove-Item -LiteralPath $PidFile
 if ($Server) {
   taskkill /PID $Id /T /F | Out-Null
   Write-Host "$Instance server stopped (PID $Id)"

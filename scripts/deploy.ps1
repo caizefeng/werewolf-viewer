@@ -33,7 +33,7 @@ if (-not $Force) {
 }
 
 $Old = ""
-if (Test-Path $Prod) {
+if (Test-Path -LiteralPath $Prod) {
   $Old = git -C $Prod rev-parse HEAD
   git -C $Prod checkout --quiet --detach $Commit
 } else {
@@ -45,13 +45,13 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 # symlinks they need neither an elevated terminal nor Developer Mode.
 # (Remove-Item -Recurse on .prod would follow them; use `git worktree remove`.)
 foreach ($d in "processing\venv", "processing\models") {
-  if (-not (Test-Path "$Prod\$d")) {
+  if (-not (Test-Path -LiteralPath "$Prod\$d")) {
     New-Item -ItemType Directory -Force "$Root\$d" -ErrorAction Stop | Out-Null
     New-Item -ItemType Junction -Path "$Prod\$d" -Target "$Root\$d" -ErrorAction Stop | Out-Null
   }
 }
 
-$Install = -not (Test-Path "$Prod\web\node_modules")
+$Install = -not (Test-Path -LiteralPath "$Prod\web\node_modules")
 if ($Old) {
   git -C $Prod diff --quiet $Old $Commit -- web/package.json web/pnpm-lock.yaml
   if ($LASTEXITCODE -ne 0) { $Install = $true }

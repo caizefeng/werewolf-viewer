@@ -25,20 +25,20 @@ $LogFile = "$RunDir\$Instance.log"
 New-Item -ItemType Directory -Force $RunDir, $Videos | Out-Null
 
 if (Get-ServerProcess $PidFile) {
-  Write-Host "$Instance server is already running (PID $(Get-Content $PidFile -TotalCount 1))"
+  Write-Host "$Instance server is already running (PID $(Get-Content -LiteralPath $PidFile -TotalCount 1))"
   Write-Host "Log: $LogFile"
   exit 0
 }
 
 # First start of prod: create its worktree at this tree's HEAD
-if ($Instance -eq "prod" -and -not (Test-Path $Code)) {
+if ($Instance -eq "prod" -and -not (Test-Path -LiteralPath $Code)) {
   & "$PSScriptRoot\deploy.ps1"
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 $Web = "$Code\web"
 Use-Node $Web
-if (-not (Test-Path "$Web\node_modules")) { Install-WebPackages $Web }
+if (-not (Test-Path -LiteralPath "$Web\node_modules")) { Install-WebPackages $Web }
 
 # Start server in the background: its own hidden console, so closing this
 # terminal doesn't end it (cmd only for the log redirection)
@@ -47,7 +47,7 @@ $env:VITE_INSTANCE = $Instance
 $Node = (Get-Command node).Source
 $Line = "/d /c `"`"$Node`" `"$Web\node_modules\vite\bin\vite.js`" --host 0.0.0.0 --port $Port --strictPort > `"$LogFile`" 2>&1`""
 $Proc = Start-Process -FilePath $env:ComSpec -ArgumentList $Line -WorkingDirectory $Web -WindowStyle Hidden -PassThru
-Set-Content -Path $PidFile -Value $Proc.Id -Encoding ascii
+Set-Content -LiteralPath $PidFile -Value $Proc.Id -Encoding ascii
 
 # A failed start (say, the port is taken) would otherwise go unnoticed
 $Deadline = (Get-Date).AddSeconds(20)
@@ -58,9 +58,9 @@ while (-not $Up -and -not $Proc.HasExited -and (Get-Date) -lt $Deadline) {
   try { $Client.Connect("127.0.0.1", $Port); $Up = $true } catch {} finally { $Client.Close() }
 }
 if ($Proc.HasExited) {
-  Remove-Item $PidFile -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $PidFile -ErrorAction SilentlyContinue
   Write-Host "$Instance server failed to start:"
-  Get-Content $LogFile -Tail 15 | ForEach-Object { Write-Host "  $_" }
+  Get-Content -LiteralPath $LogFile -Tail 15 | ForEach-Object { Write-Host "  $_" }
   exit 1
 }
 

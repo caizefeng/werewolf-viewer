@@ -88,6 +88,12 @@ def _touch_drag(pg, x0, y0, x1, y1, steps=8):
     cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x0, "y": y0}]})
     for x, y in points[1:]:
         cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x, "y": y}]})
+    # The finger stops before it lifts. Lifted at this speed it is a fling, and
+    # Chromium on Windows then drops the next tap as the one stopping the fling
+    # (touch events arrive, no click)
+    pg.wait_for_timeout(150)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x1, "y": y1}]})
+    pg.wait_for_timeout(150)
     cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
     cdp.detach()
 

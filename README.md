@@ -92,7 +92,7 @@ A tab that has been open for a while can't overwrite newer data. If the game cha
 
 ### Phones and tablets
 
-The server listens on the whole local network, so a phone or tablet on the same Wi-Fi opens the viewer at the computer's address, port 5173.
+The server listens on the whole local network, so a phone or tablet on the same Wi-Fi opens the viewer at the computer's address, port 5173. On a Windows PC, allow Node.js through the firewall when it asks.
 
 - **Holding a phone upright.** The controls sit under the video, so nothing covers it. The PHASES and ROLES panels sit below the player as part of the page, and *By seat* lays the twelve seats out as the broadcast does: 1 to 6 on the left, 7 to 12 on the right. Library and Search share a tab bar, and the Search tab shows how many jobs are running.
 - **Turned sideways, or on a tablet.** The panels slide out from the video's edges when you tap their tabs, and a tap anywhere else closes them. A tap on the video brings up the controls; once they show, a tap plays or pauses.
@@ -116,9 +116,9 @@ The server listens on the whole local network, so a phone or tablet on the same 
 
 ## Requirements
 
-**Platform.** macOS 11 or later on Apple Silicon, or 64-bit Linux on an x86 CPU with AVX; on Windows, use WSL2. These are the systems PaddlePaddle, the OCR engine, has packages for, apart from native Windows, which this project doesn't support. Intel Macs, ARM boards such as the Raspberry Pi, and x86 chips without AVX (some Celeron, Pentium and Atom models) can't run the analysis. Development and every measurement below are on macOS; Linux should work but hasn't been tested.
+**Platform.** macOS 11 or later on Apple Silicon, 64-bit Windows on an x86 CPU with AVX, or 64-bit Linux on an x86 CPU with AVX. These are the systems PaddlePaddle, the OCR engine, has packages for. Intel Macs, ARM boards such as the Raspberry Pi, and x86 chips without AVX (some Celeron, Pentium and Atom models) can't run the analysis. Development is on macOS, Windows is tested natively on Windows 11 (no WSL needed), and Linux should work but hasn't been tested.
 
-**Software.** Python 3.11 to 3.13 (PaddlePaddle 3.3 has no packages for 3.14), Node.js 20+ with corepack, ffmpeg (for yt-dlp merges and the demo renderer), and a JavaScript runtime for yt-dlp's challenge solver (`brew install deno`).
+**Software.** Python 3.11 to 3.13 (PaddlePaddle has no packages for 3.14), Node.js 20+ with corepack, ffmpeg (for yt-dlp merges and the demo renderer), and a JavaScript runtime for yt-dlp's challenge solver (`brew install deno`, or `winget install DenoLand.Deno` on Windows). Windows also needs the Visual C++ Redistributable, which PaddlePaddle's OCR acceleration library loads at startup.
 
 **Hardware.**
 
@@ -152,6 +152,8 @@ To time your own machine, run `python3 processing/benchmarks/benchmark_hardware.
 
 ## Setup
 
+### macOS and Linux
+
 ```bash
 git clone https://github.com/caizefeng/werewolf-viewer.git
 cd werewolf-viewer
@@ -166,6 +168,35 @@ cd web && pnpm install && cd ..
 scripts/start.sh        # http://localhost:5173/ (LAN-reachable); scripts/stop.sh to stop
 ```
 
+### Windows
+
+Windows runs natively, with no WSL and no elevated terminal. In PowerShell:
+
+```powershell
+# Skip what you already have, then open a new terminal so PATH picks them up
+winget install Git.Git Python.Python.3.11 Schniz.fnm Gyan.FFmpeg DenoLand.Deno Microsoft.VCRedist.2015+.x64
+
+git clone https://github.com/caizefeng/werewolf-viewer.git
+cd werewolf-viewer
+
+py -3.11 -m venv processing\venv
+processing\venv\Scripts\python -m pip install -r processing\requirements.txt
+
+scripts\start.cmd       # http://localhost:5173/ (LAN-reachable); scripts\stop.cmd to stop
+```
+
+The first start sets up Node.js (fnm reads `web\.node-version`) and the web packages by itself, and creates the production worktree. If you would rather not use fnm, any Node.js 20 to 24 on `PATH` works, or a newer one with pnpm installed.
+
+The scripts below are `scripts\start.cmd`, `stop.cmd`, `deploy.cmd` and `dev-library.cmd`, with the same arguments as their `.sh` counterparts. A `.cmd` file runs whatever the PowerShell execution policy is. These things differ from macOS:
+
+- **Keep the clone's path short.** Windows limits a file path to 260 characters unless long paths are switched on, and the Python packages go deep, so `pip install` fails when the clone's own path is longer than about 90 characters. Either clone somewhere like `C:\src\werewolf-viewer` or, in an elevated PowerShell, run `Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem LongPathsEnabled 1`. Even with long paths on, Windows won't load a DLL from a path over 260 characters, so stay under about 150 characters regardless. Spaces and Chinese characters in the path are fine.
+- **Firewall.** The first start makes Windows ask whether Node.js may accept connections. Allow it for the network your phone or tablet is on, or decline if only this PC will use the viewer.
+- **Stopping the server ends its jobs.** `scripts\stop.cmd` also ends any running download or analysis; on macOS those carry on detached. Check `/api/job-status` first. A stopped download picks up from its partial file when you start it again.
+- **Paddle 3.2.2 instead of 3.3.1.** `processing\requirements.txt` picks the version. Paddle's Windows builds have oneDNN, which makes OCR about 15 times faster, and 3.3 crashes in it on the text-detection model. The analysis gives the same results either way (see [Processing time](#processing-time)).
+- **Removing the production worktree.** `.prod\processing\venv` and `models` are directory junctions into the main tree, and `Remove-Item -Recurse` follows them. Use `git worktree remove --force .prod`.
+
+### Instances
+
 The server runs as two instances, so work in progress never reaches the one people are watching:
 
 | | `scripts/start.sh prod` (default) | `scripts/start.sh dev` |
@@ -178,6 +209,8 @@ The server runs as two instances, so work in progress never reaches the one peop
 
 OCR models (about 130 MB) download into `processing/models/` on first use.
 
+### Command line
+
 The command line does the same work as the UI:
 
 ```bash
@@ -185,6 +218,12 @@ python3 processing/download.py --video-id="VIDEO_ID"     # quote IDs that start 
 python3 processing/analyze.py --video-id="VIDEO_ID"      # writes videos/VIDEO_ID/metadata.json
 python3 processing/analyze.py --video-id="VIDEO_ID" --keep-edits   # re-analyse, keep edited nights / masks
 python3 processing/update_role_maps.py [VIDEO_ID ...]    # re-scan roles only, keeps manual edits
+```
+
+On Windows the interpreter is `processing\venv\Scripts\python` instead of `python3`:
+
+```powershell
+processing\venv\Scripts\python processing\analyze.py --video-id=VIDEO_ID
 ```
 
 ### Environment variables
@@ -208,6 +247,15 @@ python3 processing/demo/make_demo_video.py          # three games into processin
 cd web && WEREWOLF_DEMO=1 WEREWOLF_VIDEOS_DIR=/tmp/demo-library pnpm exec vite --port 5174
 ```
 
+On Windows, in PowerShell (the demo games use the Microsoft YaHei font):
+
+```powershell
+processing\venv\Scripts\python processing\demo\make_demo_video.py
+cd web
+$env:WEREWOLF_DEMO = 1; $env:WEREWOLF_VIDEOS_DIR = "$env:TEMP\demo-library"
+fnm exec node node_modules\vite\bin\vite.js --port 5174
+```
+
 Search for `demo cup`, download the three games, and the real pipeline analyses them. The screenshots above are taken the same way, by a script:
 
 ```bash
@@ -227,6 +275,14 @@ python3 tests/e2e/run.py --fresh      # re-analyse the demo games first (after p
 python3 tests/e2e/run.py mobile --webkit   # phones and tablets on WebKit, Safari's engine (playwright install webkit)
 ```
 
+On Windows:
+
+```powershell
+processing\venv\Scripts\python -m pip install -r tests\requirements.txt
+processing\venv\Scripts\playwright install chromium
+processing\venv\Scripts\python tests\e2e\run.py
+```
+
 ## Project structure
 
 ```
@@ -238,12 +294,13 @@ werewolf-viewer/
 │   ├── analyze_names.py        # role map and masks (PaddleOCR), banner and sidebar checks
 │   ├── update_role_maps.py     # re-scan roles only, preserving manual edits
 │   ├── download.py             # yt-dlp download with client fallbacks
+│   ├── platform_compat.py      # what differs on Windows: venv layout, UTF-8 output, file locks
 │   ├── demo/                   # synthetic game renderer + demo download stand-in
 │   └── benchmarks/             # ground-truth validation, hardware timing
 ├── web/
 │   ├── vite.config.js          # dev server: API, job queue, file serving
 │   └── src/                    # main.js (library, search, jobs), player.js (player, masks, reveal), style.css
-├── scripts/                    # start.sh / stop.sh [prod|dev], deploy.sh, dev-library.sh
+├── scripts/                    # start / stop [prod|dev], deploy, dev-library: .sh, and .cmd + .ps1 for Windows
 ├── tests/e2e/                  # browser end-to-end tests (demo library, Playwright)
 ├── docs/screenshots/           # README images (demo games)
 ├── videos/                     # downloaded games + metadata (gitignored)

@@ -41,8 +41,8 @@ function Install-WebPackages($WebDir) {
 # The instance's running server, or $null. PIDs get reused quickly on Windows,
 # so a recorded PID only counts if that process really is our server.
 function Get-ServerProcess($PidFile) {
-  if (-not (Test-Path $PidFile)) { return $null }
-  $id = (Get-Content $PidFile -TotalCount 1).Trim()
+  if (-not (Test-Path -LiteralPath $PidFile)) { return $null }
+  $id = (Get-Content -LiteralPath $PidFile -TotalCount 1).Trim()
   $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
   if ($proc -and $proc.CommandLine -match "vite\.js") { return $proc }
   return $null

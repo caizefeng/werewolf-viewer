@@ -15,12 +15,11 @@ $Dst = "$Root\videos-dev"
 
 $Ids = @($args)
 if ($Ids.Count -eq 1 -and $Ids[0] -eq "--all") {
-  $Ids = @(Get-ChildItem $Src -Directory | Where-Object { Test-Path "$($_.FullName)\metadata.json" } | ForEach-Object { $_.Name })
+  $Ids = @(Get-ChildItem -LiteralPath $Src -Directory | Where-Object { Test-Path -LiteralPath "$($_.FullName)\metadata.json" } | ForEach-Object { $_.Name })
 }
 if ($Ids.Count -eq 0) { Write-Host "usage: scripts\dev-library.cmd VIDEO_ID... | --all"; exit 2 }
 
 foreach ($id in $Ids) {
-  # -LiteralPath throughout: nothing about a video ID should act as a wildcard
   if (-not (Test-Path -LiteralPath "$Src\$id\video.mp4")) {
     Write-Host "skip ${id}: no $Src\$id\video.mp4"
     continue

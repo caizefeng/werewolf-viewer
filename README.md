@@ -129,7 +129,12 @@ The server listens on the whole local network, so a phone or tablet on the same 
 | Disk | 1.5 GB for the Python environment, OCR models and web packages | Plus about 1.7 GB per hour of video: YouTube's 1080p60 H.264, 1.2 to 2.1 GB per hour |
 | GPU | Not needed | |
 
-Everything runs on the CPU by default. With the CUDA build of PaddlePaddle the OCR runs on an NVIDIA GPU (untested here), but video decoding stays on the CPU. Apple GPUs are not used.
+Everything runs on the CPU by default. With the CUDA build of PaddlePaddle the OCR runs on an NVIDIA GPU, but video decoding stays on the CPU. Apple GPUs are not used. On Windows, tested with an RTX 4080 SUPER, this switches a venv to that build:
+
+```powershell
+processing\venv\Scripts\python -m pip uninstall -y paddlepaddle
+processing\venv\Scripts\python -m pip install --no-deps paddlepaddle-gpu==3.2.2 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+```
 
 ### Processing time
 
@@ -147,6 +152,20 @@ Measured on a Mac mini with an Apple M4 (4 performance and 6 efficiency cores, 1
 - **Two at once**, the server's default: the 1 h 02 and 1 h 37 games finished side by side in 5.1 and 5.3 minutes, only 1.3 minutes sooner than back to back, because one analysis already keeps most of the M4 busy. Together they peaked at 6.0 GB.
 - **A slower CPU.** The analysis is CPU-bound, so its time scales with CPU speed. Restricted to its six efficiency cores (`taskpolicy -c background`), the same Mac took twice as long: 7.5 minutes instead of 3.7 for the 1 h 02 game, measured on the earlier AV1 download.
 - **Downloads** depend on your connection and on YouTube. Here the H.264 downloads of 28 games ran at 4 to 37 MB/s, so a one-hour game (about 1.7 GB) took 1 to 7 minutes; at 50 Mbit/s it would take about 4.5. Now and then YouTube throttles a download to about 2 MB/s (some 12 minutes for that game); stopping it and downloading again gets a fresh connection.
+
+On Windows 11, measured on a PC with an AMD Ryzen 7 7800X3D (8 cores, 16 threads, 32 GB), one game at a time:
+
+| Game length | Video file | Analysis | With an RTX 4080 SUPER |
+|---|---|---|---|
+| 39 min | 1.1 GB | 1.6 min | 1.0 min |
+| 47 min | 1.3 GB | 1.9 min | 1.2 min |
+| 51 min | 1.4 GB | 1.2 min | |
+| 1 h 38 min | 2.6 GB | 2.6 min | 2.0 min |
+| 2 h 28 min | 4.5 GB | 3.6 min | |
+
+- **Where the time goes.** Decoding takes about the same as on the M4, 1.2 to 1.5 minutes per hour of video. OCR is where this machine gains: a frame takes 2 s (0.17 s on the GPU) against 7 to 8 s, because PaddlePaddle's Windows build has oneDNN and the Mac's doesn't. An analysis peaks at 2 to 3 GB. The 51-minute game is a hidden-roles broadcast, with few OCR checks.
+- **The same results.** Eight games from three seasons, open and hidden roles, were analysed on Windows and on the Mac from the same video files. Both found the same nights and card viewings to the hundredth of a second, and the same roles and factions, with masks within 0.1% of the frame's width and reveal bands within 0.01% of its height. The GPU gave the same results on the three games it was run on.
+- **Two at once** doesn't pay on this CPU: the 47-minute and 1 h 38 games took 4.7 and 4.8 minutes side by side against 4.5 back to back, peaking at 5.5 GB. Starting the server with `$env:WEREWOLF_MAX_ANALYSES = 1` runs them one after the other.
 
 To time your own machine, run `python3 processing/benchmarks/benchmark_hardware.py VIDEO_ID ...` on games you have downloaded. It analyses them through a temporary library, so their metadata is left alone, and prints the same figures; `--together` runs them side by side.
 
@@ -198,8 +217,9 @@ The scripts below are `scripts\start.cmd`, `stop.cmd`, `deploy.cmd` and `dev-lib
   ```powershell
   cmd /c rmdir .prod\processing\venv
   cmd /c rmdir .prod\processing\models
+  Remove-Item -Recurse -Force .prod
   git worktree unlock .prod
-  git worktree remove --force .prod
+  git worktree prune
   ```
 
 ### Instances
@@ -242,7 +262,7 @@ processing\venv\Scripts\python processing\analyze.py --video-id=VIDEO_ID
 | `WEREWOLF_VIDEOS_DIR` | `videos/` | Where games are stored |
 | `WEREWOLF_DEMO` | unset | Serve the rendered demo games instead of YouTube |
 
-The YouTube channel searched by default is set by `CHANNEL_URL` in `web/vite.config.js`.
+On Windows, set them in PowerShell before starting the server, for example `$env:WEREWOLF_MAX_ANALYSES = 1`. The YouTube channel searched by default is set by `CHANNEL_URL` in `web/vite.config.js`.
 
 ### Demo mode
 
@@ -258,9 +278,12 @@ On Windows, in PowerShell (the demo games use the Microsoft YaHei font):
 
 ```powershell
 processing\venv\Scripts\python processing\demo\make_demo_video.py
+fnm env --shell powershell | Out-String | Invoke-Expression      # Node on PATH in this terminal
 cd web
+fnm use --install-if-missing
+corepack pnpm install --frozen-lockfile
 $env:WEREWOLF_DEMO = 1; $env:WEREWOLF_VIDEOS_DIR = "$env:TEMP\demo-library"
-fnm exec node node_modules\vite\bin\vite.js --port 5174
+node node_modules\vite\bin\vite.js --port 5174
 ```
 
 Search for `demo cup`, download the three games, and the real pipeline analyses them. The screenshots above are taken the same way, by a script:
@@ -287,6 +310,7 @@ On Windows:
 ```powershell
 processing\venv\Scripts\python -m pip install -r tests\requirements.txt
 processing\venv\Scripts\playwright install chromium
+scripts\start.cmd dev; scripts\stop.cmd dev                      # once, to install web\node_modules
 processing\venv\Scripts\python tests\e2e\run.py
 ```
 

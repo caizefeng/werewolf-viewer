@@ -208,9 +208,11 @@ needs an elevated terminal.
   whatever holds it and report "started". deploy.ps1 uses junctions for `.prod`'s venv and models (no elevation or
   Developer Mode). GOTCHA: **`git worktree remove --force` follows junctions** and deletes the real venv and models
   (Git for Windows 2.44, checked on a sacrificial target; PS 5.1's `Remove-Item -Recurse`, Git Bash's `rm -rf` and
-  `shutil.rmtree` do not), so deploy.ps1 locks the worktree, which makes git refuse and doesn't hinder a checkout. To
-  remove it: `cmd /c rmdir` each junction, `git worktree unlock .prod`, then `git worktree remove --force .prod`. Keep
-  the .ps1 files ASCII (Windows PowerShell reads a file without a BOM in the ANSI code page)
+  `shutil.rmtree` do not), and it then stops at pnpm's dangling junctions in node_modules with half a tree left. So
+  deploy.ps1 locks the worktree, which makes git refuse and doesn't hinder a checkout. To remove it: `cmd /c rmdir` each
+  junction, `Remove-Item -Recurse -Force .prod`, `git worktree unlock .prod`, `git worktree prune`. Keep the .ps1
+  files ASCII (Windows PowerShell reads a file without a BOM in the ANSI code page). `fnm exec corepack` doesn't work
+  (corepack is a .cmd, fnm exec runs executables only); `fnm exec node` does
 - **Jobs** (vite.config.js): `spawnForJob` is `detached` only off Windows. There `detached` means DETACHED_PROCESS:
   python has no console, so each console program it starts (yt-dlp, ffmpeg, the OCR subprocess) would open a window;
   `windowsHide` (CREATE_NO_WINDOW) gives them one hidden console to share. `process.kill(-pid)` fails with ESRCH there
@@ -251,7 +253,25 @@ needs an elevated terminal.
 - **Video and browsers**: Playwright's Chromium, Chrome and Edge all decode the H.264 + AAC downloads on Windows
 - Security: `/..%5c..%5cREADME.md`, `/CON`, `/NUL`, `/C:/Windows/win.ini` and the like fall through to index.html, and
   Vite's `/@fs/` answers 403. `video.mp4::$DATA` and `METADATA.JSON` reach the same file inside the library, nothing else
-- Not tested: Windows 10, Python 3.12 / 3.13 on Windows, Windows on ARM
+- **Performance** (`benchmark_hardware.py`, 2026-11-02, Ryzen 7 7800X3D, 8 cores / 16 threads, 32 GB, Windows 11, Defender
+  on): full analysis 1.2-3.6 min for 39 min-2 h 28 games, decode 1.2-1.5 min per hour, peak 2.0-3.0 GB, 12.5-14.5 logical
+  CPUs busy on average (oneDNN's OpenMP threads spin; not tuned). Frame OCR 2.0 s, sidebar check 0.95 s, banner check 0.26 s.
+  Two at once give no gain here: 4.7 + 4.8 min against 1.9 + 2.6 alone. CUDA (paddlepaddle-gpu 3.2.2, cu126, wheel only
+  on Paddle's own index, `--no-deps` or pip probes that slow index for every dependency): frame 0.17 s, sidebar 0.10 s,
+  banner 0.02 s, full analysis 58-120 s against 96-156 s. It warns about CUDNN 9.9 vs 9.5 on this PC, harmlessly so far
+- **Verified on this PC, 2026-11-02**: same video files as the Mac, 8 games from S21-S23 (EC-1bimFjo4, X5J6PIMh368,
+  zla5T_T4UKQ, 40RdPP2AuMs, 7SG4f3ZpZP0, qLx2H23Yg9k, LoeYtJO3Gq0, 9Yij3uRUp1M; open, hidden roles, re-deal, tour, split
+  screen, unlit first night): nights and cards equal to the hundredth of a second, all roles and factions equal, masks
+  within 0.001, bands within 0.0001 (CUDA build on 3 of them: the same). GROUND_TRUTH + CARD_GROUND_TRUTH pass. A YouTube
+  download differs from the Mac's copy of the same game in 6 bytes, ffmpeg's version tag (Lavf61 vs Lavf62). The Chromium
+  e2e suites all pass. `run.py mobile --webkit` is 53/54 here (54/54 on the Mac): Playwright's Windows port of WebKit
+  completes rapid seeks out of order (`seeking@252 ... seeked@147`) and reports videoWidth 372 for a 1920 video, so a
+  drag ends at the wrong time; no browser a person uses runs that engine on Windows. A fresh clone following the README (Git's default
+  autocrlf=true, a path with spaces, Node removed, a clean home, Restricted policy, not elevated), then a browser: search,
+  Download, analysis, open, play. A clone under `狼人 杀\` with a home under `家\`: first-run model download, analysis,
+  both instances, deploy. Node 22 from a zip without fnm; Node 26 without corepack (clear error), with pnpm (works)
+- Not tested: Windows 10, Python 3.12 / 3.13 on Windows, Windows on ARM, a real phone against a Windows server (the LAN
+  path was checked from the Mac with curl)
 
 ## Algorithm Notes
 

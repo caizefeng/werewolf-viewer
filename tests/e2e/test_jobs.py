@@ -1,9 +1,13 @@
 """Jobs and the files they hold: a stop ends everything the job started (a
 process group on macOS and Linux, a process tree on Windows, where a file stays
 locked until its process has gone), a game can be deleted while a browser
-streams it, and a save waits out a reader holding the file open."""
+streams it, a save waits out a reader holding the file open, and on Windows a
+request for a file another program locked doesn't end the server."""
+import ctypes
+import os
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import psutil
@@ -16,13 +20,23 @@ def _job(base, vid):
 
 
 def _procs(vid):
-    """Command lines of the running processes that name the game."""
+    """Command lines of the job's running processes: the download or analysis
+    script (--video-id=) and the OCR subprocess."""
     found = []
     for p in psutil.process_iter(["cmdline"]):
         cmd = " ".join(p.info["cmdline"] or [])
-        if vid in cmd:
+        if vid in cmd and ("--video-id=" in cmd or "analyze_names" in cmd):
             found.append(cmd)
     return found
+
+
+def _hold_exclusively(path):
+    """Open a file with share mode 0 (Windows); returns the handle."""
+    create = ctypes.windll.kernel32.CreateFileW
+    create.restype = ctypes.c_void_p
+    create.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    generic_read, no_sharing, open_existing = 0x80000000, 0, 3
+    return create(str(path), generic_read, no_sharing, None, open_existing, 0, None)
 
 
 def _wait(pred, timeout):
@@ -72,6 +86,20 @@ def run(base, run_dir, C, browser):
         C.check("a game can be deleted while its video is being streamed",
                 len(first) == 65536 and st == 200 and _wait(lambda: not (run_dir / G1).exists(), 5), f"{st} {r}")
     C.check("...and the server carries on", api(base, "/api/job-status")[0] == 200)
+
+    if os.name == "nt":
+        # Some programs open a file with no sharing at all, which only Windows
+        # has. One request for such a file used to end the server.
+        for name in ("metadata.json", "video.mp4"):
+            locked = _hold_exclusively(run_dir / G2 / name)
+            try:
+                st, _ = api(base, f"/{G2}/{name}")
+            except (urllib.error.URLError, OSError) as e:
+                st = type(e).__name__
+            ctypes.windll.kernel32.CloseHandle(locked)
+            C.check(f"a request for {name} while a program holds it exclusively is answered with a failure", st != 200, str(st))
+            C.check("...and the server carries on", api(base, "/api/job-status")[0] == 200)
+        C.check("...and serves the file once it is released", api(base, f"/{G2}/metadata.json")[0] == 200)
 
     st, r = api(base, "/api/state", {"videoId": G2, "position": 5.0, "duration": 180.0})
     C.check("a resume point saves", st == 200, f"{st} {r}")

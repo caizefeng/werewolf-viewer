@@ -247,7 +247,13 @@ needs an elevated terminal.
   ~150 is the real limit (numpy.libs' openblas name is the longest, 68)
 - **File locks**: Windows refuses a rename over a file anything has open and a delete of a file open without
   FILE_SHARE_DELETE (Python's `open`, OpenCV's FFmpeg; Node's own streams share delete, so deleting a game while it
-  streams works). `replaceFile` (vite.config.js) and `replace_file` (platform_compat) retry on Windows
+  streams works). `replaceFile` (vite.config.js) and `replace_file` (platform_compat) retry on Windows. A program can
+  also hold a file with no sharing at all (share mode 0); `readFileSync` then throws EBUSY and a read stream emits
+  `error`, and one request for such a file used to end the server (an unhandled rejection, an unhandled event). Now
+  `sendFile` listens and a catch-all around the async middleware answers 500 or closes the connection. Reads while
+  metadata.json is replaced are fine: 15,000 reads during 14,000 replaces, none failed. GOTCHA when stress-testing: a new
+  connection per request exhausts Windows' ephemeral ports within seconds, and that looks exactly like a dead server;
+  use persistent connections and check the listening socket (psutil.net_connections)
 - **Firewall**: the first start binds 0.0.0.0, and Windows Firewall asks whether node.exe may accept connections. The
   rule it adds names the node.exe path (fnm's, so a new Node version asks again)
 - **Video and browsers**: Playwright's Chromium, Chrome and Edge all decode the H.264 + AAC downloads on Windows
@@ -943,7 +949,8 @@ bottom edge differs by < 24 levels).
   events arrive, no click; 0 of 3 taps clicked against 3 of 3). `jobs` (2026-11-02, 18 checks, ~30 s, added with
   Windows support because no suite covered Stop): a stop during a download and during an analysis ends every process
   naming the game, removes the partial game or keeps the video, a delete is refused during a job and works right
-  after it, a game can be deleted while its video streams, and a save waits out a reader holding the file open
+  after it, a game can be deleted while its video streams, a save waits out a reader holding the file open, and on
+  Windows (5 more checks) a request for a file another program holds exclusively doesn't end the server
 - **Run mutating UI tests here, not against the real server**: the earlier scratch walks used the
   real library and left `original_*` fields in metadata.json (which mark user corrections); the
   scratch scripts under /tmp were also purged by macOS after a few days, hence the move into the repo

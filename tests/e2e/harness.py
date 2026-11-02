@@ -162,12 +162,16 @@ def wait_jobs_idle(base, timeout=900):
 def read_state(run_dir, vid):
     """A game's viewer_state.json as a dict, None if absent, "CORRUPT" if unreadable."""
     p = Path(run_dir) / vid / "viewer_state.json"
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except ValueError:
-        return "CORRUPT"
+    for _ in range(20):
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except ValueError:
+            return "CORRUPT"
+        except PermissionError:     # Windows: the server is replacing it this instant
+            time.sleep(0.05)
+    raise TimeoutError(f"{p} stayed locked")
 
 
 class Checks:

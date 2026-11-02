@@ -263,6 +263,16 @@ function replaceFile(from, to) {
   }
 }
 
+// Stream a file to a response. A failed open (a program holds the file
+// exclusively, which Windows allows: EBUSY) is an 'error' event, which without
+// a listener would end the server.
+function sendFile(filePath, res, range) {
+  const stream = fs.createReadStream(filePath, range);
+  stream.on("error", () => res.destroy());
+  res.on("close", () => stream.destroy());
+  stream.pipe(res);
+}
+
 function stopJob(job) {
   if (job.done) return false;
   if (job.proc) killJobTree(job.proc);
@@ -359,7 +369,7 @@ export default defineConfig({
     {
       name: "serve-videos",
       configureServer(server) {
-        server.middlewares.use(async (req, res, next) => {
+        const handle = async (req, res, next) => {
           let url;
           try {
             url = decodeURIComponent(req.url.split("?")[0]);
@@ -672,18 +682,14 @@ export default defineConfig({
                   "Content-Length": chunkSize,
                   "Content-Type": mime,
                 });
-                const stream = fs.createReadStream(filePath, { start, end });
-                res.on("close", () => stream.destroy());
-                stream.pipe(res);
+                sendFile(filePath, res, { start, end });
               } else {
                 res.writeHead(200, {
                   "Content-Length": stat.size,
                   "Content-Type": mime,
                   "Accept-Ranges": "bytes",
                 });
-                const stream = fs.createReadStream(filePath);
-                res.on("close", () => stream.destroy());
-                stream.pipe(res);
+                sendFile(filePath, res);
               }
             } else if (path.basename(filePath) === "metadata.json") {
               // Edits are saved against the version a page loaded (see
@@ -697,14 +703,22 @@ export default defineConfig({
               res.end(body);
             } else {
               res.writeHead(200, { "Content-Type": mime });
-              const stream = fs.createReadStream(filePath);
-              res.on("close", () => stream.destroy());
-              stream.pipe(res);
+              sendFile(filePath, res);
             }
             return;
           }
 
           next();
+        };
+        // A throw in an async handler is an unhandled rejection, which ends the
+        // server and every job with it. On Windows it takes one request for a
+        // file another program holds exclusively (EBUSY).
+        server.middlewares.use((req, res, next) => {
+          handle(req, res, next).catch((err) => {
+            console.error(`${req.method} ${req.url}: ${err.message}`);
+            if (res.headersSent) res.destroy();
+            else jsonResponse(res, 500, { error: err.message });
+          });
         });
       },
     },

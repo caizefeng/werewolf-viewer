@@ -873,7 +873,7 @@ def _init_ocr():
             print("  Using GPU (CUDA)")
         # Paddle 3.3's oneDNN executor crashes on the detection model
         # (ConvertPirAttribute2RuntimeAttribute not support ...). Without oneDNN
-        # OCR works, 15x slower, which is why requirements.txt pins 3.2.2 on
+        # OCR works, 8x slower, which is why requirements.txt pins 3.2.2 on
         # Windows; this is for a build that has it anyway. Apple builds have none.
         onednn_broken = paddle.__version__.startswith("3.3.") and paddle.base.core.is_compiled_with_onednn()
     except Exception:

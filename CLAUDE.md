@@ -230,8 +230,8 @@ needs an elevated terminal.
   ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]` at
   onednn_instruction.cc:118, as soon as OCR runs (the recognition model is fine; `set_mkldnn_op` and deleting single
   fuse passes don't help, and there is no kernel blacklist flag in this build). Without oneDNN it works but one
-  frame takes 16.5 s and `cpu_threads` has no effect (M4: 7-8 s); on 3.2.2 with oneDNN detection takes 0.2 s against
-  3.1 s and recognition 0.03 s against 0.12 s. So requirements.txt pins 3.2.2 on Windows (env marker; pip reports no
+  frame takes 16.5 s and `cpu_threads` has no effect (M4: 7-8 s); on 3.2.2 with oneDNN a frame takes 2.0 s (detection
+  0.2 s against 3.1 s, recognition 0.03 s against 0.12 s). So requirements.txt pins 3.2.2 on Windows (env marker; pip reports no
   change for the Mac's venv), and `_init_ocr` passes `enable_mkldnn=False` for any oneDNN build on 3.3.x
   (a stale venv; presumably Linux x86 too, untested). Windows pip also installs `opencv-python` next to paddlex's
   `opencv-contrib-python==4.10.0.84`, both into cv2/; the contrib wheel lands last, as on the Mac (`cv2.__version__`
@@ -269,8 +269,9 @@ needs an elevated terminal.
   zla5T_T4UKQ, 40RdPP2AuMs, 7SG4f3ZpZP0, qLx2H23Yg9k, LoeYtJO3Gq0, 9Yij3uRUp1M; open, hidden roles, re-deal, tour, split
   screen, unlit first night): nights and cards equal to the hundredth of a second, all roles and factions equal, masks
   within 0.001, bands within 0.0001 (CUDA build on 3 of them: the same). GROUND_TRUTH + CARD_GROUND_TRUTH pass. A YouTube
-  download differs from the Mac's copy of the same game in 6 bytes, ffmpeg's version tag (Lavf61 vs Lavf62). The Chromium
-  e2e suites all pass. `run.py mobile --webkit` is 53/54 here (54/54 on the Mac): Playwright's Windows port of WebKit
+  download differs from the Mac's copy of the same game in 6 bytes, ffmpeg's version tag (Lavf61 vs Lavf62). The e2e
+  suites pass on Chromium: 206/206 here, 201/201 on the Mac (183 + the jobs suite; the Mac's metadata.json is
+  byte-identical before and after this work on 8 real games and the 3 demo games). `run.py mobile --webkit` is 53/54 here (54/54 on the Mac): Playwright's Windows port of WebKit
   completes rapid seeks out of order (`seeking@252 ... seeked@147`) and reports videoWidth 372 for a 1920 video, so a
   drag ends at the wrong time; no browser a person uses runs that engine on Windows. A fresh clone following the README (Git's default
   autocrlf=true, a path with spaces, Node removed, a clean home, Restricted policy, not elevated), then a browser: search,

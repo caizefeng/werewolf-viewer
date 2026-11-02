@@ -204,9 +204,13 @@ needs an elevated terminal.
   `Get-ServerProcess` (a PID file only counts if that process's command line has vite.js: Windows reuses PIDs
   quickly and stop kills a tree). start.ps1 runs node + vite.js directly inside `cmd /d /c "... > log 2>&1"` under
   `Start-Process -WindowStyle Hidden` (its own hidden console, so it survives the terminal), waits up to 20 s for
-  the port and prints the log if the server died (strictPort). deploy.ps1 uses junctions for `.prod`'s venv and
-  models (no elevation or Developer Mode); `Remove-Item -Recurse .prod` would follow them, use `git worktree remove
-  --force .prod`. Keep the .ps1 files ASCII (Windows PowerShell reads a file without a BOM in the ANSI code page)
+  the port and prints the log if the server died; a port already in use is refused first, or the wait would connect to
+  whatever holds it and report "started". deploy.ps1 uses junctions for `.prod`'s venv and models (no elevation or
+  Developer Mode). GOTCHA: **`git worktree remove --force` follows junctions** and deletes the real venv and models
+  (Git for Windows 2.44, checked on a sacrificial target; PS 5.1's `Remove-Item -Recurse`, Git Bash's `rm -rf` and
+  `shutil.rmtree` do not), so deploy.ps1 locks the worktree, which makes git refuse and doesn't hinder a checkout. To
+  remove it: `cmd /c rmdir` each junction, `git worktree unlock .prod`, then `git worktree remove --force .prod`. Keep
+  the .ps1 files ASCII (Windows PowerShell reads a file without a BOM in the ANSI code page)
 - **Jobs** (vite.config.js): `spawnForJob` is `detached` only off Windows. There `detached` means DETACHED_PROCESS:
   python has no console, so each console program it starts (yt-dlp, ffmpeg, the OCR subprocess) would open a window;
   `windowsHide` (CREATE_NO_WINDOW) gives them one hidden console to share. `process.kill(-pid)` fails with ESRCH there

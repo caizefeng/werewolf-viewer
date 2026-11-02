@@ -40,6 +40,15 @@ $Web = "$Code\web"
 Use-Node $Web
 if (-not (Test-Path -LiteralPath "$Web\node_modules")) { Install-WebPackages $Web }
 
+function Test-Port {
+  $Client = New-Object System.Net.Sockets.TcpClient
+  try { $Client.Connect("127.0.0.1", $Port); return $true } catch { return $false } finally { $Client.Close() }
+}
+if (Test-Port) {
+  Write-Host "$Instance server can't start: something else is using port $Port"
+  exit 1
+}
+
 # Start server in the background: its own hidden console, so closing this
 # terminal doesn't end it (cmd only for the log redirection)
 $env:WEREWOLF_VIDEOS_DIR = $Videos
@@ -49,13 +58,10 @@ $Line = "/d /c `"`"$Node`" `"$Web\node_modules\vite\bin\vite.js`" --host 0.0.0.0
 $Proc = Start-Process -FilePath $env:ComSpec -ArgumentList $Line -WorkingDirectory $Web -WindowStyle Hidden -PassThru
 Set-Content -LiteralPath $PidFile -Value $Proc.Id -Encoding ascii
 
-# A failed start (say, the port is taken) would otherwise go unnoticed
+# A failed start would otherwise go unnoticed
 $Deadline = (Get-Date).AddSeconds(20)
-$Up = $false
-while (-not $Up -and -not $Proc.HasExited -and (Get-Date) -lt $Deadline) {
+while (-not $Proc.HasExited -and -not (Test-Port) -and (Get-Date) -lt $Deadline) {
   Start-Sleep -Milliseconds 300
-  $Client = New-Object System.Net.Sockets.TcpClient
-  try { $Client.Connect("127.0.0.1", $Port); $Up = $true } catch {} finally { $Client.Close() }
 }
 if ($Proc.HasExited) {
   Remove-Item -LiteralPath $PidFile -ErrorAction SilentlyContinue

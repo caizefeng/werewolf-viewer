@@ -193,7 +193,14 @@ The scripts below are `scripts\start.cmd`, `stop.cmd`, `deploy.cmd` and `dev-lib
 - **Firewall.** The first start makes Windows ask whether Node.js may accept connections. Allow it for the network your phone or tablet is on, or decline if only this PC will use the viewer.
 - **Stopping the server ends its jobs.** `scripts\stop.cmd` also ends any running download or analysis; on macOS those carry on detached. Check `/api/job-status` first. A stopped download picks up from its partial file when you start it again.
 - **Paddle 3.2.2 instead of 3.3.1.** `processing\requirements.txt` picks the version. Paddle's Windows builds have oneDNN, which makes OCR about 15 times faster, and 3.3 crashes in it on the text-detection model. The analysis gives the same results either way (see [Processing time](#processing-time)).
-- **Removing the production worktree.** `.prod\processing\venv` and `models` are directory junctions into the main tree, and `Remove-Item -Recurse` follows them. Use `git worktree remove --force .prod`.
+- **Removing the production worktree.** `.prod\processing\venv` and `models` are directory junctions into the main tree. `git worktree remove` follows junctions and would delete the real ones, so `deploy.cmd` locks the worktree against it. To remove it, take the junctions out first:
+
+  ```powershell
+  cmd /c rmdir .prod\processing\venv
+  cmd /c rmdir .prod\processing\models
+  git worktree unlock .prod
+  git worktree remove --force .prod
+  ```
 
 ### Instances
 

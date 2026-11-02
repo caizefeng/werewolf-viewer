@@ -38,12 +38,15 @@ if (Test-Path -LiteralPath $Prod) {
   git -C $Prod checkout --quiet --detach $Commit
 } else {
   git -C $Root worktree add --quiet --detach $Prod $Commit
+  if ($LASTEXITCODE -ne 0) { exit 1 }
+  # `git worktree remove --force` would follow the junctions below and delete
+  # the real venv and models; the lock makes it refuse (see the README)
+  git -C $Root worktree lock --reason "its venv and models are junctions: remove those first, see the README" $Prod
 }
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # Gitignored pieces the worktree shares with the main tree. Junctions: unlike
 # symlinks they need neither an elevated terminal nor Developer Mode.
-# (Remove-Item -Recurse on .prod would follow them; use `git worktree remove`.)
 foreach ($d in "processing\venv", "processing\models") {
   if (-not (Test-Path -LiteralPath "$Prod\$d")) {
     New-Item -ItemType Directory -Force "$Root\$d" -ErrorAction Stop | Out-Null

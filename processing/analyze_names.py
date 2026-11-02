@@ -812,37 +812,50 @@ def _ensure_models():
     if all(ok(d) for d in dirs.values()):
         return dirs[OCR_DET_MODEL], dirs[OCR_REC_MODEL]
 
-    print(f"  OCR models {OCR_DET_MODEL} / {OCR_REC_MODEL} not found locally. Downloading...")
     os.makedirs(_MODELS_DIR, exist_ok=True)
     import shutil
-    if WINDOWS:
-        # Download only: loading them from the cache would fail for a user
-        # name with non-ASCII characters (see _init_ocr)
-        from paddlex.inference.utils.official_models import official_models
-        for name in dirs:
-            official_models[name]
-    else:
-        tmp_ocr = PaddleOCR(
-            lang="ch",
-            text_detection_model_name=OCR_DET_MODEL,
-            text_recognition_model_name=OCR_REC_MODEL,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-        )
-        del tmp_ocr
+    from filelock import FileLock  # comes with paddlex
 
-    cache_base = os.path.expanduser("~/.paddlex/official_models")
-    for name, dst in dirs.items():
-        src = os.path.join(cache_base, name)
-        if ok(src):
-            if os.path.isdir(dst):
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
-            print(f"  Copied {name} to local models/")
-    if not all(ok(d) for d in dirs.values()):
-        print("  Could not copy the models locally; using PaddleOCR's cache directly")
-        return None, None
+    # On a first run both of the analysis's processes can get here together, and
+    # their copies collided: on Windows one of them failed every time, sometimes
+    # leaving a model without a file. So one works while the other waits, and a
+    # model appears whole, by rename.
+    with FileLock(os.path.join(_MODELS_DIR, ".setup.lock")):
+        if all(ok(d) for d in dirs.values()):
+            return dirs[OCR_DET_MODEL], dirs[OCR_REC_MODEL]
+
+        print(f"  OCR models {OCR_DET_MODEL} / {OCR_REC_MODEL} not found locally. Downloading...")
+        if WINDOWS:
+            # Download only: loading them from the cache would fail for a user
+            # name with non-ASCII characters (see _init_ocr)
+            from paddlex.inference.utils.official_models import official_models
+            for name in dirs:
+                official_models[name]
+        else:
+            tmp_ocr = PaddleOCR(
+                lang="ch",
+                text_detection_model_name=OCR_DET_MODEL,
+                text_recognition_model_name=OCR_REC_MODEL,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+            del tmp_ocr
+
+        cache_base = os.path.expanduser("~/.paddlex/official_models")
+        for name, dst in dirs.items():
+            src = os.path.join(cache_base, name)
+            if ok(src):
+                tmp = dst + ".copying"
+                for d in (tmp, dst):
+                    if os.path.isdir(d):
+                        shutil.rmtree(d)
+                shutil.copytree(src, tmp)
+                os.replace(tmp, dst)
+                print(f"  Copied {name} to local models/")
+        if not all(ok(d) for d in dirs.values()):
+            print("  Could not copy the models locally; using PaddleOCR's cache directly")
+            return None, None
     return dirs[OCR_DET_MODEL], dirs[OCR_REC_MODEL]
 
 
